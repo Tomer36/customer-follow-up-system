@@ -7,6 +7,10 @@ import PrivateRoute from './components/PrivateRoute';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
+import CustomersList from './pages/CustomersList';
+import CustomerDetail from './pages/CustomerDetail';
+import TasksList from './pages/TasksList';
+import TaskDetail from './pages/TaskDetail';
 
 const theme = createTheme({
     palette: {
@@ -33,6 +37,38 @@ function App() {
                             element={
                                 <PrivateRoute>
                                     <Dashboard />
+                                </PrivateRoute>
+                            }
+                        />
+                        <Route
+                            path="/customers"
+                            element={
+                                <PrivateRoute>
+                                    <CustomersList />
+                                </PrivateRoute>
+                            }
+                        />
+                        <Route
+                            path="/customers/:id"
+                            element={
+                                <PrivateRoute>
+                                    <CustomerDetail />
+                                </PrivateRoute>
+                            }
+                        />
+                        <Route
+                            path="/tasks"
+                            element={
+                                <PrivateRoute>
+                                    <TasksList />
+                                </PrivateRoute>
+                            }
+                        />
+                        <Route
+                            path="/tasks/:id"
+                            element={
+                                <PrivateRoute>
+                                    <TaskDetail />
                                 </PrivateRoute>
                             }
                         />

@@ -133,6 +133,26 @@ const auth = async (req, res, next) => {
     }
 };
 
+const getCustomerAccessCondition = () => `
+    (c.created_by = ? OR EXISTS (
+        SELECT 1
+        FROM customer_notes cn
+        WHERE cn.customer_id = c.id
+          AND cn.managed_by = ?
+    ))
+`;
+
+const canAccessCustomer = async (customerId, userId) => {
+    const [rows] = await pool.execute(`
+        SELECT c.id
+        FROM customers c
+        WHERE c.id = ?
+          AND ${getCustomerAccessCondition()}
+        LIMIT 1
+    `, [customerId, userId, userId]);
+    return rows.length > 0;
+};
+
 // Get profile (protected)
 app.get('/api/me', async (req, res) => {
     try {
@@ -164,6 +184,68 @@ app.get('/api/me', async (req, res) => {
     }
 });
 
+// ===== USER ROUTES =====
+
+app.get('/api/users', auth, async (req, res) => {
+    try {
+        const [users] = await pool.execute(
+            'SELECT id, email, full_name, created_at FROM users ORDER BY created_at DESC'
+        );
+        res.json({ users });
+    } catch (error) {
+        console.error('Get users error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.get('/api/users/:id', auth, async (req, res) => {
+    try {
+        const [users] = await pool.execute(
+            'SELECT id, email, full_name, created_at FROM users WHERE id = ?',
+            [req.params.id]
+        );
+        if (users.length === 0) return res.status(404).json({ error: 'User not found' });
+        res.json({ user: users[0] });
+    } catch (error) {
+        console.error('Get user by id error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.put('/api/users/:id', auth, async (req, res) => {
+    try {
+        const { email, full_name } = req.body;
+        if (!email || !full_name) {
+            return res.status(400).json({ error: 'email and full_name are required' });
+        }
+
+        await pool.execute(
+            'UPDATE users SET email = ?, full_name = ? WHERE id = ?',
+            [email, full_name, req.params.id]
+        );
+
+        const [users] = await pool.execute(
+            'SELECT id, email, full_name, created_at FROM users WHERE id = ?',
+            [req.params.id]
+        );
+        if (users.length === 0) return res.status(404).json({ error: 'User not found' });
+        res.json({ message: 'User updated', user: users[0] });
+    } catch (error) {
+        console.error('Update user error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+app.delete('/api/users/:id', auth, async (req, res) => {
+    try {
+        await pool.execute('DELETE FROM users WHERE id = ?', [req.params.id]);
+        res.json({ message: 'User deleted' });
+    } catch (error) {
+        console.error('Delete user error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // ===== CUSTOMER ROUTES =====
 
 // Get all customers
@@ -174,20 +256,22 @@ app.get('/api/customers', auth, async (req, res) => {
         const offset = (page - 1) * limit;
         const search = req.query.search || '';
 
-        let query = 'SELECT * FROM customers';
-        let countQuery = 'SELECT COUNT(*) as total FROM customers';
-        const params = [];
+        let query = `SELECT c.* FROM customers c WHERE ${getCustomerAccessCondition()}`;
+        let countQuery = `SELECT COUNT(*) as total FROM customers c WHERE ${getCustomerAccessCondition()}`;
+        const params = [req.userId, req.userId];
+        const countParams = [req.userId, req.userId];
 
         if (search) {
-            query += ' WHERE name LIKE ? OR company LIKE ?';
-            countQuery += ' WHERE name LIKE ? OR company LIKE ?';
+            query += ' AND (c.name LIKE ? OR c.company LIKE ?)';
+            countQuery += ' AND (c.name LIKE ? OR c.company LIKE ?)';
             params.push(`%${search}%`, `%${search}%`);
+            countParams.push(`%${search}%`, `%${search}%`);
         }
 
-        query += ' ORDER BY name ASC LIMIT ? OFFSET ?';
+        query += ' ORDER BY c.name ASC LIMIT ? OFFSET ?';
 
         const [customers] = await pool.execute(query, [...params, limit, offset]);
-        const [countResult] = await pool.execute(countQuery, params);
+        const [countResult] = await pool.execute(countQuery, countParams);
 
         res.json({
             customers,
@@ -204,14 +288,296 @@ app.get('/api/customers', auth, async (req, res) => {
     }
 });
 
+// Sync customers (placeholder scaffold)
+app.post('/api/customers/sync', auth, async (req, res) => {
+    try {
+        // Placeholder: external API fetching is intentionally not implemented.
+        // For now, pass customers in request body:
+        // { customers: [{ external_id, name, email, phone, company, notes }] }
+        const incomingCustomers = Array.isArray(req.body?.customers) ? req.body.customers : [];
+
+        if (incomingCustomers.length === 0) {
+            return res.json({
+                message: 'Sync scaffold is ready. Provide customers in request body to test upsert.',
+                synced: 0
+            });
+        }
+
+        let synced = 0;
+        for (const item of incomingCustomers) {
+            if (!item?.external_id || !item?.name) continue;
+
+            await pool.execute(`
+                INSERT INTO customers (external_id, name, email, phone, company, notes, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    name = VALUES(name),
+                    email = VALUES(email),
+                    phone = VALUES(phone),
+                    company = VALUES(company),
+                    notes = VALUES(notes),
+                    created_by = COALESCE(customers.created_by, VALUES(created_by)),
+                    updated_at = CURRENT_TIMESTAMP
+            `, [
+                item.external_id,
+                item.name,
+                item.email || null,
+                item.phone || null,
+                item.company || null,
+                item.notes || null,
+                req.userId
+            ]);
+            synced += 1;
+        }
+
+        return res.json({
+            message: 'Customers upserted using sync scaffold. External API integration is still a placeholder.',
+            synced
+        });
+    } catch (error) {
+        console.error('Sync customers error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // Get customer by ID
 app.get('/api/customers/:id', auth, async (req, res) => {
     try {
-        const [rows] = await pool.execute('SELECT * FROM customers WHERE id = ?', [req.params.id]);
+        const [rows] = await pool.execute(`
+            SELECT c.*
+            FROM customers c
+            WHERE c.id = ?
+              AND ${getCustomerAccessCondition()}
+        `, [req.params.id, req.userId, req.userId]);
         if (rows.length === 0) return res.status(404).json({ error: 'Customer not found' });
         res.json({ customer: rows[0] });
     } catch (error) {
         console.error('Get customer error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Get groups for one customer
+app.get('/api/customers/:id/groups', auth, async (req, res) => {
+    try {
+        const hasAccess = await canAccessCustomer(req.params.id, req.userId);
+        if (!hasAccess) return res.status(404).json({ error: 'Customer not found' });
+
+        const [groups] = await pool.execute(`
+            SELECT g.* FROM \`groups\` g
+            INNER JOIN customer_groups cg ON cg.group_id = g.id
+            WHERE cg.customer_id = ?
+            ORDER BY g.name ASC
+        `, [req.params.id]);
+        res.json({ groups });
+    } catch (error) {
+        console.error('Get customer groups error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Assign customer to a group
+app.post('/api/customers/:id/groups', auth, async (req, res) => {
+    try {
+        const hasAccess = await canAccessCustomer(req.params.id, req.userId);
+        if (!hasAccess) return res.status(404).json({ error: 'Customer not found' });
+
+        const { group_id } = req.body;
+        if (!group_id) return res.status(400).json({ error: 'group_id is required' });
+
+        await pool.execute(
+            'INSERT IGNORE INTO customer_groups (customer_id, group_id) VALUES (?, ?)',
+            [req.params.id, group_id]
+        );
+
+        res.json({ message: 'Customer assigned to group' });
+    } catch (error) {
+        console.error('Assign customer group error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Get notes for one customer
+app.get('/api/customers/:id/notes', auth, async (req, res) => {
+    try {
+        const hasAccess = await canAccessCustomer(req.params.id, req.userId);
+        if (!hasAccess) return res.status(404).json({ error: 'Customer not found' });
+
+        const [notes] = await pool.execute(`
+            SELECT
+                n.id,
+                n.note,
+                n.due_date,
+                n.action_type,
+                n.created_at,
+                creator.id as created_by_id,
+                creator.full_name as created_by_name,
+                manager.id as managed_by_id,
+                manager.full_name as manager_name,
+                g.id as group_id,
+                g.name as group_name
+            FROM customer_notes n
+            INNER JOIN users creator ON creator.id = n.created_by
+            LEFT JOIN users manager ON manager.id = n.managed_by
+            LEFT JOIN \`groups\` g ON g.id = n.group_id
+            WHERE n.customer_id = ?
+            ORDER BY n.created_at DESC
+        `, [req.params.id]);
+        res.json({ notes });
+    } catch (error) {
+        console.error('Get customer notes error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Add note for one customer
+app.post('/api/customers/:id/notes', auth, async (req, res) => {
+    try {
+        const hasAccess = await canAccessCustomer(req.params.id, req.userId);
+        if (!hasAccess) return res.status(404).json({ error: 'Customer not found' });
+
+        const { note, due_date, managed_by, group_id } = req.body;
+        if (!note || !note.trim()) return res.status(400).json({ error: 'note is required' });
+        if (!due_date) return res.status(400).json({ error: 'due_date is required' });
+
+        const managedProvided = managed_by !== undefined && managed_by !== null && managed_by !== '';
+        const groupProvided = group_id !== undefined && group_id !== null && group_id !== '';
+
+        const [latestRows] = await pool.execute(`
+            SELECT managed_by, group_id
+            FROM customer_notes
+            WHERE customer_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+        `, [req.params.id]);
+
+        const latest = latestRows[0] || null;
+        const managerId = managedProvided
+            ? Number(managed_by)
+            : (latest?.managed_by || req.userId);
+        const groupId = groupProvided
+            ? Number(group_id)
+            : (latest?.group_id || null);
+        const actionType = (managerId !== req.userId || groupId) ? 'transfer' : 'note';
+
+        const [result] = await pool.execute(
+            `INSERT INTO customer_notes (customer_id, note, due_date, created_by, managed_by, group_id, action_type)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [req.params.id, note.trim(), due_date, req.userId, managerId, groupId, actionType]
+        );
+
+        if (groupId) {
+            await pool.execute(
+                'INSERT IGNORE INTO customer_groups (customer_id, group_id) VALUES (?, ?)',
+                [req.params.id, groupId]
+            );
+        }
+
+        const [rows] = await pool.execute(`
+            SELECT
+                n.id,
+                n.note,
+                n.due_date,
+                n.action_type,
+                n.created_at,
+                creator.id as created_by_id,
+                creator.full_name as created_by_name,
+                manager.id as managed_by_id,
+                manager.full_name as manager_name,
+                g.id as group_id,
+                g.name as group_name
+            FROM customer_notes n
+            INNER JOIN users creator ON creator.id = n.created_by
+            LEFT JOIN users manager ON manager.id = n.managed_by
+            LEFT JOIN \`groups\` g ON g.id = n.group_id
+            WHERE n.id = ?
+        `, [result.insertId]);
+
+        res.status(201).json({ message: 'Note added', note: rows[0] });
+    } catch (error) {
+        console.error('Add customer note error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Get transfer records for one customer
+app.get('/api/customers/:id/transfers', auth, async (req, res) => {
+    try {
+        const hasAccess = await canAccessCustomer(req.params.id, req.userId);
+        if (!hasAccess) return res.status(404).json({ error: 'Customer not found' });
+
+        const [transfers] = await pool.execute(`
+            SELECT
+                n.id,
+                n.note,
+                n.due_date,
+                n.created_at,
+                creator.id as created_by_id,
+                creator.full_name as created_by_name,
+                manager.id as managed_by_id,
+                manager.full_name as manager_name,
+                g.id as group_id,
+                g.name as group_name
+            FROM customer_notes n
+            INNER JOIN users creator ON creator.id = n.created_by
+            LEFT JOIN users manager ON manager.id = n.managed_by
+            LEFT JOIN \`groups\` g ON g.id = n.group_id
+            WHERE n.customer_id = ?
+              AND n.action_type = 'transfer'
+            ORDER BY n.created_at DESC
+        `, [req.params.id]);
+        res.json({ transfers });
+    } catch (error) {
+        console.error('Get customer transfers error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Transfer customer to manager/group
+app.post('/api/customers/:id/transfers', auth, async (req, res) => {
+    try {
+        const hasAccess = await canAccessCustomer(req.params.id, req.userId);
+        if (!hasAccess) return res.status(404).json({ error: 'Customer not found' });
+
+        const { note, due_date, managed_by, group_id } = req.body;
+        if (!due_date) return res.status(400).json({ error: 'due_date is required' });
+        if (!managed_by) return res.status(400).json({ error: 'managed_by is required' });
+        if (!group_id) return res.status(400).json({ error: 'group_id is required' });
+
+        const text = (note || '').trim();
+        const [result] = await pool.execute(
+            `INSERT INTO customer_notes (customer_id, note, due_date, created_by, managed_by, group_id, action_type)
+             VALUES (?, ?, ?, ?, ?, ?, 'transfer')`,
+            [req.params.id, text || 'Transfer to handling', due_date, req.userId, managed_by, group_id]
+        );
+
+        await pool.execute(
+            'INSERT IGNORE INTO customer_groups (customer_id, group_id) VALUES (?, ?)',
+            [req.params.id, group_id]
+        );
+
+        const [rows] = await pool.execute(`
+            SELECT
+                n.id,
+                n.note,
+                n.due_date,
+                n.created_at,
+                creator.id as created_by_id,
+                creator.full_name as created_by_name,
+                manager.id as managed_by_id,
+                manager.full_name as manager_name,
+                g.id as group_id,
+                g.name as group_name
+            FROM customer_notes n
+            INNER JOIN users creator ON creator.id = n.created_by
+            LEFT JOIN users manager ON manager.id = n.managed_by
+            LEFT JOIN \`groups\` g ON g.id = n.group_id
+            WHERE n.id = ?
+        `, [result.insertId]);
+
+        res.status(201).json({ message: 'Customer transferred', transfer: rows[0] });
+    } catch (error) {
+        console.error('Transfer customer error:', error);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -223,8 +589,8 @@ app.post('/api/customers', auth, async (req, res) => {
         if (!name) return res.status(400).json({ error: 'Name is required' });
 
         const [result] = await pool.execute(
-            'INSERT INTO customers (name, email, phone, company, notes) VALUES (?, ?, ?, ?, ?)',
-            [name, email || null, phone || null, company || null, notes || null]
+            'INSERT INTO customers (name, email, phone, company, notes, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+            [name, email || null, phone || null, company || null, notes || null, req.userId]
         );
 
         const [customer] = await pool.execute('SELECT * FROM customers WHERE id = ?', [result.insertId]);
@@ -238,6 +604,9 @@ app.post('/api/customers', auth, async (req, res) => {
 // Update customer
 app.put('/api/customers/:id', auth, async (req, res) => {
     try {
+        const hasAccess = await canAccessCustomer(req.params.id, req.userId);
+        if (!hasAccess) return res.status(404).json({ error: 'Customer not found' });
+
         const { name, email, phone, company, notes } = req.body;
         await pool.execute(
             'UPDATE customers SET name = ?, email = ?, phone = ?, company = ?, notes = ? WHERE id = ?',
@@ -254,6 +623,9 @@ app.put('/api/customers/:id', auth, async (req, res) => {
 // Delete customer
 app.delete('/api/customers/:id', auth, async (req, res) => {
     try {
+        const hasAccess = await canAccessCustomer(req.params.id, req.userId);
+        if (!hasAccess) return res.status(404).json({ error: 'Customer not found' });
+
         await pool.execute('DELETE FROM customers WHERE id = ?', [req.params.id]);
         res.json({ message: 'Customer deleted' });
     } catch (error) {
@@ -328,6 +700,25 @@ app.get('/api/tasks', auth, async (req, res) => {
         res.json({ tasks });
     } catch (error) {
         console.error('Get tasks error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Get task by ID
+app.get('/api/tasks/:id', auth, async (req, res) => {
+    try {
+        const [tasks] = await pool.execute(`
+            SELECT t.*, c.name as customer_name, g.name as group_name
+            FROM tasks t
+            LEFT JOIN customers c ON t.customer_id = c.id
+            LEFT JOIN \`groups\` g ON t.group_id = g.id
+            WHERE t.id = ?
+        `, [req.params.id]);
+
+        if (tasks.length === 0) return res.status(404).json({ error: 'Task not found' });
+        res.json({ task: tasks[0] });
+    } catch (error) {
+        console.error('Get task error:', error);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -464,8 +855,9 @@ app.get('/api/groups/:id/customers', auth, async (req, res) => {
             SELECT c.* FROM customers c
             INNER JOIN customer_groups cg ON c.id = cg.customer_id
             WHERE cg.group_id = ?
+              AND ${getCustomerAccessCondition()}
             ORDER BY c.name ASC
-        `, [req.params.id]);
+        `, [req.params.id, req.userId, req.userId]);
         res.json({ customers });
     } catch (error) {
         console.error('Get group customers error:', error);

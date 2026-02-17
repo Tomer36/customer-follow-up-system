@@ -44,12 +44,32 @@ export const authAPI = {
     }
 };
 
+// Users API
+export const usersAPI = {
+    getAll: () =>
+        api.get('/users').then(r => r.data),
+};
+
 // Customers API
 export const customersAPI = {
-    getAll: (page = 1, search = '') =>
-        api.get(`/customers?page=${page}&limit=20&search=${search}`).then(r => r.data),
+    getAll: (page = 1, search = '', limit = 20) =>
+        api.get(`/customers?page=${page}&limit=${limit}&search=${search}`).then(r => r.data),
     getById: (id) =>
         api.get(`/customers/${id}`).then(r => r.data),
+    getNotes: (id) =>
+        api.get(`/customers/${id}/notes`).then(r => r.data),
+    getTransfers: (id) =>
+        api.get(`/customers/${id}/transfers`).then(r => r.data),
+    addNote: (id, payload) =>
+        api.post(`/customers/${id}/notes`, payload).then(r => r.data),
+    addTransfer: (id, payload) =>
+        api.post(`/customers/${id}/transfers`, payload).then(r => r.data),
+    getGroups: (id) =>
+        api.get(`/customers/${id}/groups`).then(r => r.data),
+    assignGroup: (id, groupId) =>
+        api.post(`/customers/${id}/groups`, { group_id: groupId }).then(r => r.data),
+    sync: () =>
+        api.post('/customers/sync').then(r => r.data),
     create: (data) =>
         api.post('/customers', data).then(r => r.data),
     update: (id, data) =>
@@ -62,6 +82,8 @@ export const customersAPI = {
 export const tasksAPI = {
     getAll: (filters = {}) =>
         api.get('/tasks', { params: filters }).then(r => r.data),
+    getById: (id) =>
+        api.get(`/tasks/${id}`).then(r => r.data),
     getDaily: () =>
         api.get('/tasks/daily').then(r => r.data),
     getOverdue: () =>

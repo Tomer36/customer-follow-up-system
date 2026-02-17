@@ -1,5 +1,5 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
     Container,
     Paper,
@@ -7,7 +7,8 @@ import {
     Box,
     Button,
     Grid,
-    Avatar
+    Avatar,
+    Stack
 } from '@mui/material';
 import PersonIcon from '@mui/icons-material/Person';
 import LogoutIcon from '@mui/icons-material/Logout';
@@ -116,6 +117,22 @@ function Dashboard() {
                                         {new Date().toLocaleString()}
                                     </Typography>
                                 </Box>
+                            </Paper>
+                        </Grid>
+
+                        <Grid item xs={12}>
+                            <Paper sx={{ p: 3 }}>
+                                <Typography variant="h6" gutterBottom>
+                                    Quick Navigation
+                                </Typography>
+                                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                                    <Button component={Link} to="/customers" variant="contained">
+                                        Customers
+                                    </Button>
+                                    <Button component={Link} to="/tasks" variant="outlined">
+                                        Tasks
+                                    </Button>
+                                </Stack>
                             </Paper>
                         </Grid>
                     </Grid>
