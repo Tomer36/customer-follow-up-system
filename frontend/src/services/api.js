@@ -54,6 +54,17 @@ export const usersAPI = {
 export const customersAPI = {
     getAll: (page = 1, search = '', limit = 20) =>
         api.get(`/customers?page=${page}&limit=${limit}&search=${search}`).then(r => r.data),
+    getReport175: (page = 1, search = '', limit = 20, filters = {}) =>
+        api.get('/customers/reports/175', {
+            params: {
+                page,
+                limit,
+                search,
+                balanceMode: filters.balanceMode || 'balance_non_zero',
+                ...(filters.managedBy ? { managedBy: filters.managedBy } : {}),
+                ...(filters.groupId ? { groupId: filters.groupId } : {})
+            }
+        }).then(r => r.data),
     getById: (id) =>
         api.get(`/customers/${id}`).then(r => r.data),
     getNotes: (id) =>

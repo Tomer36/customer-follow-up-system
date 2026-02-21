@@ -288,55 +288,546 @@ app.get('/api/customers', auth, async (req, res) => {
     }
 });
 
-// Sync customers (placeholder scaffold)
-app.post('/api/customers/sync', auth, async (req, res) => {
-    try {
-        // Placeholder: external API fetching is intentionally not implemented.
-        // For now, pass customers in request body:
-        // { customers: [{ external_id, name, email, phone, company, notes }] }
-        const incomingCustomers = Array.isArray(req.body?.customers) ? req.body.customers : [];
+const fetchReport175Payload = async () => {
+    const sourceUrl = config.externalApi.customersUrl;
+    if (!sourceUrl) {
+        const err = new Error('External API URL is missing. Set EXTERNAL_CUSTOMERS_API_URL in .env');
+        err.status = 500;
+        throw err;
+    }
 
-        if (incomingCustomers.length === 0) {
-            return res.json({
-                message: 'Sync scaffold is ready. Provide customers in request body to test upsert.',
-                synced: 0
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.externalApi.timeoutMs);
+
+    try {
+        const headers = { Accept: 'application/json', 'Content-Type': 'application/json' };
+        if (config.externalApi.token) {
+            headers.Authorization = `Bearer ${config.externalApi.token}`;
+        }
+
+        const response = await fetch(sourceUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                dateFrom: '01/01/2020'
+            }),
+            signal: controller.signal
+        });
+
+        if (!response.ok) {
+            const err = new Error(`External API failed with status ${response.status}`);
+            err.status = 502;
+            throw err;
+        }
+
+        return response.json();
+    } catch (error) {
+        const code = error?.cause?.code || error?.code;
+        if (code === 'ECONNREFUSED') {
+            const err = new Error(`Cannot connect to external API at ${sourceUrl}`);
+            err.status = 502;
+            throw err;
+        }
+        if (error?.name === 'AbortError') {
+            const err = new Error(`External API timeout after ${config.externalApi.timeoutMs}ms`);
+            err.status = 504;
+            throw err;
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeout);
+    }
+};
+
+const fetchReport184Payload = async (customer) => {
+    const sourceUrl = config.externalApi.customerDetailsUrl || config.externalApi.customersUrl;
+    if (!sourceUrl) return null;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.externalApi.timeoutMs);
+
+    try {
+        const headers = { Accept: 'application/json', 'Content-Type': 'application/json' };
+        if (config.externalApi.token) {
+            headers.Authorization = `Bearer ${config.externalApi.token}`;
+        }
+
+        const payload = {
+            accountKey: customer?.company || null,
+            externalId: customer?.external_id || null
+        };
+
+        const response = await fetch(sourceUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+            signal: controller.signal
+        });
+
+        if (!response.ok) {
+            return null;
+        }
+
+        return response.json();
+    } catch (error) {
+        return null;
+    } finally {
+        clearTimeout(timeout);
+    }
+};
+
+const rowLooksLikeReport175 = (row) =>
+    row &&
+    typeof row === 'object' &&
+    (
+        Object.prototype.hasOwnProperty.call(row, '\u05de\u05e1\u05e4\u05e8 \u05db\u05e8\u05d8\u05d9\u05e1 \u05d7\u05e9\u05d1\u05d5\u05df') ||
+        Object.prototype.hasOwnProperty.call(row, 'מספר כרטיס חשבון') ||
+        Object.prototype.hasOwnProperty.call(row, '×ž×¡×¤×¨ ×›×¨×˜×™×¡ ×—×©×‘×•×Ÿ')
+    );
+
+const pickReport175Value = (row, keys) => {
+    for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(row, key)) {
+            return row[key];
+        }
+    }
+    return null;
+};
+
+const toReport175Number = (value) => {
+    const numeric = Number(String(value ?? '').replace(/,/g, '').trim());
+    return Number.isFinite(numeric) ? numeric : 0;
+};
+
+const extractReport175Rows = (payload) => {
+    if (Array.isArray(payload)) return payload;
+    if (!payload || typeof payload !== 'object') return [];
+
+    const arrays = [];
+    const queue = [payload];
+
+    while (queue.length > 0) {
+        const current = queue.shift();
+        if (!current || typeof current !== 'object') continue;
+
+        for (const value of Object.values(current)) {
+            if (Array.isArray(value)) {
+                arrays.push(value);
+            } else if (value && typeof value === 'object') {
+                queue.push(value);
+            }
+        }
+    }
+
+    if (arrays.length === 0) return [];
+
+    let best = arrays[0];
+    let bestScore = -1;
+    for (const arr of arrays) {
+        const objectRows = arr.filter((x) => x && typeof x === 'object');
+        const reportRows = objectRows.filter(rowLooksLikeReport175);
+        const score = (reportRows.length * 1000) + objectRows.length;
+        if (score > bestScore) {
+            bestScore = score;
+            best = arr;
+        }
+    }
+
+    return best;
+};
+
+const pickReportRowForCustomer = (rows, customer) => {
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+
+    const mapped = rows
+        .filter((row) => row && typeof row === 'object')
+        .map(mapReport175Row);
+
+    if (!mapped.length) return null;
+
+    const byExternalId = mapped.find((row) => String(row.external_id) === String(customer?.external_id));
+    if (byExternalId) return byExternalId;
+
+    const byAccountKey = mapped.find((row) => String(row.account_key || '') === String(customer?.company || ''));
+    if (byAccountKey) return byAccountKey;
+
+    return mapped[0] || null;
+};
+
+const mapReport175Row = (row) => {
+    const accountCardNumber = toReport175Number(pickReport175Value(row, [
+        '\u05de\u05e1\u05e4\u05e8 \u05db\u05e8\u05d8\u05d9\u05e1 \u05d7\u05e9\u05d1\u05d5\u05df',
+        'מספר כרטיס חשבון',
+        '×ž×¡×¤×¨ ×›×¨×˜×™×¡ ×—×©×‘×•×Ÿ'
+    ]));
+    const accountKey = String(pickReport175Value(row, [
+        '\u05de\u05e4\u05ea\u05d7 \u05d7\u05e9\u05d1\u05d5\u05df',
+        'מפתח חשבון',
+        '×ž×¤×ª×— ×—×©×‘×•×Ÿ'
+    ]) ?? '').trim();
+    const accountName = String(pickReport175Value(row, [
+        '\u05e9\u05dd \u05d7\u05e9\u05d1\u05d5\u05df',
+        'שם חשבון',
+        '×©× ×—×©×‘×•×Ÿ'
+    ]) ?? '').trim();
+
+    const external_id = accountCardNumber > 0
+        ? String(accountCardNumber)
+        : (accountKey || `row_${crypto.createHash('sha1').update(JSON.stringify(row)).digest('hex')}`);
+
+    return {
+        external_id,
+        account_card_number: accountCardNumber > 0 ? accountCardNumber : null,
+        account_key: accountKey || null,
+        account_name: accountName || null,
+        account_balance: toReport175Number(pickReport175Value(row, [
+            '\u05d9\u05ea\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df',
+            'יתרת חשבון',
+            '×™×ª×¨×ª ×—×©×‘×•×Ÿ'
+        ])),
+        deferred_checks: toReport175Number(pickReport175Value(row, ['\u05e9\u05d9\u05e7\u05d9\u05dd \u05d3\u05d7\u05d5\u05d9\u05d9\u05dd'])),
+        open_delivery_notes_balance: toReport175Number(pickReport175Value(row, ['\u05d9\u05ea\u05e8\u05ea \u05ea\u05e2\u05d5\u05d3\u05d5\u05ea \u05de\u05e9\u05dc\u05d5\u05d7 \u05e4\u05ea\u05d5\u05d7\u05d5\u05ea'])),
+        total_obligo: toReport175Number(pickReport175Value(row, ['\u05e1\u05d4"\u05db \u05d0\u05d5\u05d1\u05dc\u05d9\u05d2\u05d5'])),
+        total_credit: toReport175Number(pickReport175Value(row, ['\u05e1\u05d4"\u05db \u05d0\u05e9\u05e8\u05d0\u05d9'])),
+        credit_limit: toReport175Number(pickReport175Value(row, ['\u05ea\u05e7\u05e8\u05ea \u05d0\u05e9\u05e8\u05d0\u05d9'])),
+        credit_deviation: toReport175Number(pickReport175Value(row, ['\u05d7\u05e8\u05d9\u05d2\u05d4 \u05de\u05d0\u05e9\u05e8\u05d0\u05d9'])),
+        obligo_limit: toReport175Number(pickReport175Value(row, ['\u05ea\u05e7\u05e8\u05ea \u05d0\u05d5\u05d1\u05dc\u05d9\u05d2\u05d5'])),
+        obligo_deviation: toReport175Number(pickReport175Value(row, ['\u05d7\u05e8\u05d9\u05d2\u05d4 \u05de\u05d0\u05d5\u05d1\u05dc\u05d9\u05d2\u05d5'])),
+        raw_payload: JSON.stringify(row)
+    };
+};
+
+const upsertReport175Rows = async (rows, userId) => {
+    if (rows.length === 0) return { synced: 0 };
+
+    const chunkSize = 100;
+    let synced = 0;
+
+    for (let i = 0; i < rows.length; i += chunkSize) {
+        const chunk = rows.slice(i, i + chunkSize);
+        const placeholders = chunk.map(() => '(?, ?, ?, ?)').join(', ');
+        const values = [];
+
+        for (const row of chunk) {
+            values.push(
+                row.external_id,
+                row.account_name || row.account_key || row.external_id,
+                row.account_key || null,
+                userId
+            );
+        }
+
+        await pool.execute(`
+            INSERT INTO customers (external_id, name, company, created_by)
+            VALUES ${placeholders}
+            ON DUPLICATE KEY UPDATE
+                name = VALUES(name),
+                company = VALUES(company),
+                created_by = COALESCE(customers.created_by, VALUES(created_by)),
+                updated_at = CURRENT_TIMESTAMP
+        `, values);
+
+        synced += chunk.length;
+    }
+
+    return { synced };
+};
+
+const getCustomerIdsByExternalIds = async (externalIds, userId) => {
+    if (!externalIds.length) return new Map();
+
+    const uniqueIds = [...new Set(externalIds)].filter(Boolean);
+    if (uniqueIds.length === 0) return new Map();
+    const map = new Map();
+
+    const chunkSize = 500;
+    for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+        const chunk = uniqueIds.slice(i, i + chunkSize);
+        const placeholders = chunk.map(() => '?').join(', ');
+        const [rows] = await pool.execute(`
+            SELECT c.id, c.external_id
+            FROM customers c
+            WHERE c.external_id IN (${placeholders})
+              AND ${getCustomerAccessCondition()}
+        `, [...chunk, userId, userId]);
+
+        for (const row of rows) {
+            map.set(row.external_id, row.id);
+        }
+    }
+
+    return map;
+};
+
+const getLatestHandlingByCustomerIds = async (customerIds) => {
+    const uniqueIds = [...new Set((customerIds || []).filter(Boolean).map(Number).filter(Number.isFinite))];
+    if (uniqueIds.length === 0) return new Map();
+
+    const placeholders = uniqueIds.map(() => '?').join(', ');
+    const [rows] = await pool.execute(`
+        SELECT
+            n.customer_id,
+            n.created_at as payment_start,
+            n.due_date as payment_target,
+            n.managed_by as managed_by_id,
+            n.group_id as group_id,
+            manager.full_name as managed_by_name,
+            g.name as group_name
+        FROM customer_notes n
+        INNER JOIN (
+            SELECT customer_id, MAX(id) as latest_id
+            FROM customer_notes
+            WHERE customer_id IN (${placeholders})
+            GROUP BY customer_id
+        ) latest ON latest.latest_id = n.id
+        LEFT JOIN users manager ON manager.id = n.managed_by
+        LEFT JOIN \`groups\` g ON g.id = n.group_id
+    `, uniqueIds);
+
+    const map = new Map();
+    for (const row of rows) {
+        map.set(Number(row.customer_id), row);
+    }
+    return map;
+};
+
+const getLatestHandlingByUser = async (userId) => {
+    const [rows] = await pool.execute(`
+        SELECT
+            n.customer_id,
+            n.created_at as payment_start,
+            n.due_date as payment_target,
+            n.managed_by as managed_by_id,
+            n.group_id as group_id,
+            manager.full_name as managed_by_name,
+            g.name as group_name
+        FROM customer_notes n
+        INNER JOIN (
+            SELECT customer_id, MAX(id) as latest_id
+            FROM customer_notes
+            GROUP BY customer_id
+        ) latest ON latest.latest_id = n.id
+        INNER JOIN customers c ON c.id = n.customer_id
+        LEFT JOIN users manager ON manager.id = n.managed_by
+        LEFT JOIN \`groups\` g ON g.id = n.group_id
+        WHERE ${getCustomerAccessCondition()}
+    `, [userId, userId]);
+
+    const map = new Map();
+    for (const row of rows) {
+        map.set(Number(row.customer_id), row);
+    }
+    return map;
+};
+
+const parseOptionalInt = (value) => {
+    if (value === undefined || value === null || value === '') return null;
+    const n = Number(value);
+    return Number.isInteger(n) ? n : null;
+};
+
+const getEligibleCustomerIdsByFilters = async (userId, managedBy, groupId) => {
+    const hasManagerFilter = managedBy !== null;
+    const hasGroupFilter = groupId !== null;
+    if (!hasManagerFilter && !hasGroupFilter) return null;
+
+    let query = `
+        SELECT c.id
+        FROM customers c
+        LEFT JOIN (
+            SELECT n.customer_id, n.managed_by, n.group_id
+            FROM customer_notes n
+            INNER JOIN (
+                SELECT customer_id, MAX(id) as latest_id
+                FROM customer_notes
+                GROUP BY customer_id
+            ) latest ON latest.latest_id = n.id
+        ) ln ON ln.customer_id = c.id
+        WHERE ${getCustomerAccessCondition()}
+    `;
+    const params = [userId, userId];
+
+    if (hasManagerFilter) {
+        query += ' AND ln.managed_by = ?';
+        params.push(managedBy);
+    }
+
+    if (hasGroupFilter) {
+        query += ` AND (
+            EXISTS (
+                SELECT 1
+                FROM customer_groups cg
+                WHERE cg.customer_id = c.id AND cg.group_id = ?
+            )
+            OR ln.group_id = ?
+        )`;
+        params.push(groupId, groupId);
+    }
+
+    const [rows] = await pool.execute(query, params);
+    return new Set(rows.map((row) => Number(row.id)));
+};
+
+let report175CacheRows = [];
+let report175CacheByExternalId = new Map();
+let report175CacheSyncedAt = null;
+
+const setReport175Cache = (rows) => {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    report175CacheRows = safeRows;
+    report175CacheByExternalId = new Map(
+        safeRows
+            .filter((row) => row && row.external_id)
+            .map((row) => [String(row.external_id), row])
+    );
+    report175CacheSyncedAt = new Date().toISOString();
+};
+
+// Get report 175 customers
+app.get('/api/customers/reports/175', auth, async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const offset = (page - 1) * limit;
+        const search = String(req.query.search || '').trim().toLowerCase();
+        const managedBy = parseOptionalInt(req.query.managedBy);
+        const groupId = parseOptionalInt(req.query.groupId);
+        const balanceMode = String(req.query.balanceMode || 'balance_non_zero');
+
+        const baseRows = report175CacheRows
+            .filter((row) => {
+                if (!search) return true;
+                return (
+                    String(row.account_name || '').toLowerCase().includes(search) ||
+                    String(row.account_key || '').toLowerCase().includes(search)
+                );
+            });
+
+        const applyBalanceMode = (row) => {
+            if (balanceMode === 'balance_zero') {
+                return Number(row.account_balance || 0) === 0;
+            }
+            if (balanceMode === 'balance_zero_obligo_non_zero') {
+                return Number(row.account_balance || 0) === 0 && Number(row.total_obligo || 0) !== 0;
+            }
+            return Number(row.account_balance || 0) !== 0;
+        };
+
+        const balanceFilteredRows = baseRows.filter(applyBalanceMode);
+        const needsHandlingFilters = managedBy !== null || groupId !== null;
+
+        let filteredRowsWithHandling = [];
+        if (needsHandlingFilters) {
+            const idMapAll = await getCustomerIdsByExternalIds(balanceFilteredRows.map((r) => r.external_id), req.userId);
+            const handlingMapAll = await getLatestHandlingByUser(req.userId);
+            const eligibleCustomerIds = await getEligibleCustomerIdsByFilters(req.userId, managedBy, groupId);
+
+            if (eligibleCustomerIds && eligibleCustomerIds.size === 0) {
+                return res.json({
+                    customers: [],
+                    pagination: {
+                        total: 0,
+                        page,
+                        limit,
+                        totalPages: 1
+                    },
+                    cache: {
+                        syncedAt: report175CacheSyncedAt
+                    }
+                });
+            }
+
+            filteredRowsWithHandling = balanceFilteredRows
+                .map((row) => {
+                    const customerId = idMapAll.get(row.external_id) || null;
+                    const handling = customerId ? handlingMapAll.get(Number(customerId)) : null;
+                    return {
+                        ...row,
+                        customer_id: customerId,
+                        payment_start: handling?.payment_start || null,
+                        payment_target: handling?.payment_target || null,
+                        managed_by_id: handling?.managed_by_id || null,
+                        group_id: handling?.group_id || null,
+                        managed_by_name: handling?.managed_by_name || null,
+                        group_name: handling?.group_name || null
+                    };
+                })
+                .filter((row) => {
+                    if (!row.customer_id) return false;
+                    if (eligibleCustomerIds && !eligibleCustomerIds.has(Number(row.customer_id))) return false;
+                    return true;
+                });
+        } else {
+            const pagedBaseRows = balanceFilteredRows.slice(offset, offset + limit);
+            const idMapPaged = await getCustomerIdsByExternalIds(pagedBaseRows.map((r) => r.external_id), req.userId);
+            const handlingMapPaged = await getLatestHandlingByCustomerIds(
+                pagedBaseRows.map((row) => idMapPaged.get(row.external_id)).filter(Boolean)
+            );
+            filteredRowsWithHandling = pagedBaseRows.map((row) => {
+                const customerId = idMapPaged.get(row.external_id) || null;
+                const handling = customerId ? handlingMapPaged.get(Number(customerId)) : null;
+                return {
+                    ...row,
+                    customer_id: customerId,
+                    payment_start: handling?.payment_start || null,
+                    payment_target: handling?.payment_target || null,
+                    managed_by_id: handling?.managed_by_id || null,
+                    group_id: handling?.group_id || null,
+                    managed_by_name: handling?.managed_by_name || null,
+                    group_name: handling?.group_name || null
+                };
             });
         }
 
-        let synced = 0;
-        for (const item of incomingCustomers) {
-            if (!item?.external_id || !item?.name) continue;
+        const pagedRows = needsHandlingFilters
+            ? filteredRowsWithHandling.slice(offset, offset + limit)
+            : filteredRowsWithHandling;
 
-            await pool.execute(`
-                INSERT INTO customers (external_id, name, email, phone, company, notes, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                    name = VALUES(name),
-                    email = VALUES(email),
-                    phone = VALUES(phone),
-                    company = VALUES(company),
-                    notes = VALUES(notes),
-                    created_by = COALESCE(customers.created_by, VALUES(created_by)),
-                    updated_at = CURRENT_TIMESTAMP
-            `, [
-                item.external_id,
-                item.name,
-                item.email || null,
-                item.phone || null,
-                item.company || null,
-                item.notes || null,
-                req.userId
-            ]);
-            synced += 1;
-        }
+        const hydratedRows = pagedRows.map((row, idx) => {
+            return {
+                id: offset + idx + 1,
+                ...row,
+            };
+        });
+
+        res.json({
+            customers: hydratedRows,
+            pagination: {
+                total: needsHandlingFilters ? filteredRowsWithHandling.length : balanceFilteredRows.length,
+                page,
+                limit,
+                totalPages: Math.max(1, Math.ceil((needsHandlingFilters ? filteredRowsWithHandling.length : balanceFilteredRows.length) / limit))
+            },
+            cache: {
+                syncedAt: report175CacheSyncedAt
+            }
+        });
+    } catch (error) {
+        console.error('Get report 175 error:', error);
+        res.status(error.status || 500).json({ error: error.message || 'Server error' });
+    }
+});
+
+// Sync customers (report 175 direct call)
+app.post('/api/customers/sync', auth, async (req, res) => {
+    try {
+        const payload = await fetchReport175Payload();
+        const rows = extractReport175Rows(payload)
+            .filter((row) => row && typeof row === 'object')
+            .map(mapReport175Row);
+
+        const result = await upsertReport175Rows(rows, req.userId);
+        setReport175Cache(rows);
 
         return res.json({
-            message: 'Customers upserted using sync scaffold. External API integration is still a placeholder.',
-            synced
+            message: 'Report 175 fetched successfully.',
+            received: rows.length,
+            synced: result.synced,
+            syncedAt: report175CacheSyncedAt
         });
     } catch (error) {
         console.error('Sync customers error:', error);
-        res.status(500).json({ error: 'Server error' });
+        res.status(error.status || 500).json({ error: error.message || 'Server error' });
     }
 });
 
@@ -350,7 +841,50 @@ app.get('/api/customers/:id', auth, async (req, res) => {
               AND ${getCustomerAccessCondition()}
         `, [req.params.id, req.userId, req.userId]);
         if (rows.length === 0) return res.status(404).json({ error: 'Customer not found' });
-        res.json({ customer: rows[0] });
+
+        const customer = rows[0];
+        let report175 = report175CacheByExternalId.get(String(customer.external_id)) || null;
+        if (!report175) {
+            const payload184 = await fetchReport184Payload(customer);
+            const rows184 = extractReport175Rows(payload184);
+            report175 = pickReportRowForCustomer(rows184, customer);
+        }
+        if (!report175) {
+            report175 = {
+                external_id: customer.external_id || null,
+                account_key: customer.company || null,
+                account_name: customer.name || null,
+                account_balance: 0,
+                open_delivery_notes_balance: 0,
+                total_obligo: 0
+            };
+        }
+
+        const [latestRows] = await pool.execute(`
+            SELECT
+                n.created_at as payment_start,
+                n.due_date as payment_target,
+                manager.full_name as managed_by_name,
+                g.name as group_name
+            FROM customer_notes n
+            LEFT JOIN users manager ON manager.id = n.managed_by
+            LEFT JOIN \`groups\` g ON g.id = n.group_id
+            WHERE n.customer_id = ?
+            ORDER BY n.id DESC
+            LIMIT 1
+        `, [req.params.id]);
+
+        const latest = latestRows[0] || null;
+        res.json({
+            customer: {
+                ...customer,
+                report175,
+                payment_start: latest?.payment_start || null,
+                payment_target: latest?.payment_target || null,
+                managed_by_name: latest?.managed_by_name || null,
+                group_name: latest?.group_name || null
+            }
+        });
     } catch (error) {
         console.error('Get customer error:', error);
         res.status(500).json({ error: 'Server error' });
@@ -889,3 +1423,5 @@ app.listen(config.port, () => {
     console.log(`\n✅ Auth service running on http://localhost:${config.port}`);
     console.log(`   Health: http://localhost:${config.port}/health\n`);
 });
+
+

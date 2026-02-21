@@ -19,12 +19,12 @@ import {
     Typography
 } from '@mui/material';
 import { customersAPI, groupsAPI, usersAPI } from '../services/api';
-import { useAuth } from '../context/AuthContext';
+
+const formatNumber = (value) => Number(value || 0).toFixed(2);
 
 function CustomerDetail() {
     const queryClient = useQueryClient();
     const { id } = useParams();
-    const { user } = useAuth();
 
     const [noteText, setNoteText] = useState('');
     const [dueDate, setDueDate] = useState('');
@@ -66,12 +66,15 @@ function CustomerDetail() {
             setDueDate('');
             setManagedBy('');
             setGroupId('');
+            queryClient.invalidateQueries({ queryKey: ['customer', id] });
             queryClient.invalidateQueries({ queryKey: ['customer-notes', id] });
             queryClient.invalidateQueries({ queryKey: ['customer-groups', id] });
+            queryClient.invalidateQueries({ queryKey: ['customers'] });
         }
     });
 
     const customer = data?.customer;
+    const report = customer?.report175 || {};
     const notes = notesData?.notes || [];
     const customerGroups = customerGroupsData?.groups || [];
     const allGroups = allGroupsData?.groups || [];
@@ -96,32 +99,62 @@ function CustomerDetail() {
     };
 
     return (
-        <Container maxWidth="md">
+        <Container maxWidth="lg">
             <Box sx={{ mt: 4 }}>
                 <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-                    <Button component={Link} to="/customers" variant="outlined">Back</Button>
-                    <Button component={Link} to="/dashboard" variant="outlined">Dashboard</Button>
+                    <Button component={Link} to="/customers" variant="outlined">חזרה</Button>
+                    <Button component={Link} to="/dashboard" variant="outlined">לוח בקרה</Button>
                 </Stack>
+
                 <Paper sx={{ p: 3 }}>
                     {isLoading ? (
                         <Box sx={{ textAlign: 'center', p: 4 }}><CircularProgress /></Box>
                     ) : isError ? (
-                        <Alert severity="error">{error?.response?.data?.error || 'Failed to load customer.'}</Alert>
+                        <Alert severity="error">{error?.response?.data?.error || 'טעינת הלקוח נכשלה'}</Alert>
                     ) : !customer ? (
-                        <Alert severity="warning">Customer not found.</Alert>
+                        <Alert severity="warning">לקוח לא נמצא</Alert>
                     ) : (
                         <>
-                            <Typography variant="h4" gutterBottom>{customer.name}</Typography>
-                            <Typography><strong>Company:</strong> {customer.company || '-'}</Typography>
-                            <Typography><strong>Email:</strong> {customer.email || '-'}</Typography>
-                            <Typography><strong>Phone:</strong> {customer.phone || '-'}</Typography>
+                            <Typography variant="h5" gutterBottom>פרטי לקוח</Typography>
+                            <Table size="small" sx={{ mb: 3 }}>
+                                <TableBody>
+                                    <TableRow>
+                                        <TableCell sx={{ width: 260, fontWeight: 700 }}>מפתח חשבון</TableCell>
+                                        <TableCell>{report.account_key || customer.company || '-'}</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                        <TableCell sx={{ fontWeight: 700 }}>שם חשבון</TableCell>
+                                        <TableCell>{report.account_name || customer.name || '-'}</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                        <TableCell sx={{ fontWeight: 700 }}>יתרת תעודות משלוח פתוחות</TableCell>
+                                        <TableCell>{formatNumber(report.open_delivery_notes_balance)}</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                        <TableCell sx={{ fontWeight: 700 }}>יתרת חשבון</TableCell>
+                                        <TableCell>{formatNumber(report.account_balance)}</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                        <TableCell sx={{ fontWeight: 700 }}>סה"כ אובליגו</TableCell>
+                                        <TableCell>{formatNumber(report.total_obligo)}</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                        <TableCell sx={{ fontWeight: 700 }}>בטיפול (איזה מנהל)</TableCell>
+                                        <TableCell>{customer.managed_by_name || '-'}</TableCell>
+                                    </TableRow>
+                                    <TableRow>
+                                        <TableCell sx={{ fontWeight: 700 }}>קבוצה</TableCell>
+                                        <TableCell>{customer.group_name || customerGroups[0]?.name || '-'}</TableCell>
+                                    </TableRow>
+                                </TableBody>
+                            </Table>
 
                             <Box sx={{ mt: 3 }}>
-                                <Typography variant="subtitle2">Current Groups</Typography>
+                                <Typography variant="subtitle2">קבוצות נוכחיות</Typography>
                                 {customerGroupsLoading ? (
                                     <CircularProgress size={18} />
                                 ) : customerGroups.length === 0 ? (
-                                    <Typography variant="body2">No groups assigned.</Typography>
+                                    <Typography variant="body2">לא שויכו קבוצות</Typography>
                                 ) : (
                                     <Box>
                                         {customerGroups.map((group) => (
@@ -134,20 +167,17 @@ function CustomerDetail() {
                             </Box>
 
                             <Box sx={{ mt: 3 }}>
-                                <Typography variant="h6" gutterBottom>Add Note</Typography>
+                                <Typography variant="h6" gutterBottom>הוספת הערה</Typography>
                                 <Box component="form" onSubmit={handleAddNote}>
-                                    <Typography variant="body2" sx={{ mb: 1 }}>
-                                        Current Date: {new Date().toLocaleDateString()}
-                                    </Typography>
                                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 1 }}>
                                         <TextField
                                             select
                                             fullWidth
                                             size="small"
-                                            label="Manager"
+                                            label="מנהל אחראי"
                                             value={managedBy}
                                             onChange={(event) => setManagedBy(event.target.value)}
-                                            helperText="Leave empty to keep current manager"
+                                            helperText="אפשר להשאיר ריק כדי לשמור מנהל קיים"
                                         >
                                             {users.map((u) => (
                                                 <MenuItem key={u.id} value={u.id}>
@@ -159,11 +189,11 @@ function CustomerDetail() {
                                             select
                                             fullWidth
                                             size="small"
-                                            label="Group (optional)"
+                                            label="קבוצה (אופציונלי)"
                                             value={groupId}
                                             onChange={(event) => setGroupId(event.target.value)}
                                         >
-                                            <MenuItem value="">No group</MenuItem>
+                                            <MenuItem value="">ללא קבוצה</MenuItem>
                                             {allGroups.map((group) => (
                                                 <MenuItem key={group.id} value={group.id}>
                                                     {group.name}
@@ -176,7 +206,7 @@ function CustomerDetail() {
                                             type="date"
                                             fullWidth
                                             size="small"
-                                            label="Due Date"
+                                            label="תאריך יעד"
                                             value={dueDate}
                                             onChange={(event) => setDueDate(event.target.value)}
                                             InputLabelProps={{ shrink: true }}
@@ -187,44 +217,44 @@ function CustomerDetail() {
                                         fullWidth
                                         multiline
                                         minRows={3}
-                                        label="Note details"
+                                        label="פרטי ההערה"
                                         value={noteText}
                                         onChange={(event) => setNoteText(event.target.value)}
                                     />
                                     <Button type="submit" variant="contained" sx={{ mt: 1 }} disabled={addNoteMutation.isPending}>
-                                        Save Note
+                                        שמור הערה
                                     </Button>
                                 </Box>
                                 {addNoteMutation.isError && (
                                     <Alert severity="error" sx={{ mt: 1 }}>
-                                        {addNoteMutation.error?.response?.data?.error || 'Failed to add note.'}
+                                        {addNoteMutation.error?.response?.data?.error || 'הוספת ההערה נכשלה'}
                                     </Alert>
                                 )}
                             </Box>
 
                             <Box sx={{ mt: 3 }}>
-                                <Typography variant="h6" gutterBottom>Notes History</Typography>
+                                <Typography variant="h6" gutterBottom>היסטוריית הערות</Typography>
                                 {notesLoading ? (
                                     <CircularProgress size={18} />
                                 ) : notes.length === 0 ? (
-                                    <Typography variant="body2">No notes yet.</Typography>
+                                    <Typography variant="body2">אין הערות עדיין</Typography>
                                 ) : (
                                     <Table size="small">
                                         <TableHead>
                                             <TableRow>
-                                                <TableCell>Current Date</TableCell>
-                                                <TableCell>Due Date</TableCell>
-                                                <TableCell>Manager</TableCell>
-                                                <TableCell>Group</TableCell>
-                                                <TableCell>Created By</TableCell>
-                                                <TableCell>Details</TableCell>
+                                                <TableCell>תאריך יצירה</TableCell>
+                                                <TableCell>תאריך יעד</TableCell>
+                                                <TableCell>מנהל</TableCell>
+                                                <TableCell>קבוצה</TableCell>
+                                                <TableCell>נוצר על ידי</TableCell>
+                                                <TableCell>פרטים</TableCell>
                                             </TableRow>
                                         </TableHead>
                                         <TableBody>
                                             {notes.map((item) => (
                                                 <TableRow key={item.id}>
-                                                    <TableCell>{new Date(item.created_at).toLocaleDateString()}</TableCell>
-                                                    <TableCell>{item.due_date ? new Date(item.due_date).toLocaleDateString() : '-'}</TableCell>
+                                                    <TableCell>{new Date(item.created_at).toLocaleDateString('he-IL')}</TableCell>
+                                                    <TableCell>{item.due_date ? new Date(item.due_date).toLocaleDateString('he-IL') : '-'}</TableCell>
                                                     <TableCell>{item.manager_name || '-'}</TableCell>
                                                     <TableCell>{item.group_name || '-'}</TableCell>
                                                     <TableCell>{item.created_by_name || '-'}</TableCell>

@@ -28,7 +28,7 @@ function Login() {
             await login(email, password);
             navigate('/dashboard');
         } catch (err) {
-            setError(err.response?.data?.error || 'Login failed');
+            setError(err.response?.data?.error || 'ההתחברות נכשלה');
         } finally {
             setLoading(false);
         }
@@ -39,7 +39,7 @@ function Login() {
             <Box sx={{ mt: 8 }}>
                 <Paper elevation={3} sx={{ p: 4 }}>
                     <Typography variant="h4" component="h1" gutterBottom align="center">
-                        Login
+                        התחברות
                     </Typography>
 
                     {error && (
@@ -50,7 +50,7 @@ function Login() {
 
                     <form onSubmit={handleSubmit}>
                         <TextField
-                            label="Email"
+                            label="אימייל"
                             type="email"
                             fullWidth
                             margin="normal"
@@ -60,7 +60,7 @@ function Login() {
                         />
 
                         <TextField
-                            label="Password"
+                            label="סיסמה"
                             type="password"
                             fullWidth
                             margin="normal"
@@ -77,14 +77,14 @@ function Login() {
                             sx={{ mt: 3, mb: 2 }}
                             disabled={loading}
                         >
-                            {loading ? 'Logging in...' : 'Login'}
+                            {loading ? 'מתחבר...' : 'התחבר'}
                         </Button>
 
                         <Box sx={{ textAlign: 'center' }}>
                             <Typography variant="body2">
-                                Don't have an account?{' '}
+                                אין לך חשבון?{' '}
                                 <Link to="/register" style={{ textDecoration: 'none' }}>
-                                    Register
+                                    הרשם
                                 </Link>
                             </Typography>
                         </Box>

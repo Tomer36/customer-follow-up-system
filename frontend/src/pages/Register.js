@@ -34,7 +34,7 @@ function Register() {
         setError('');
 
         if (formData.password.length < 6) {
-            setError('Password must be at least 6 characters');
+            setError('הסיסמה חייבת להכיל לפחות 6 תווים');
             return;
         }
 
@@ -44,7 +44,7 @@ function Register() {
             await register(formData.email, formData.password, formData.fullName);
             navigate('/dashboard');
         } catch (err) {
-            setError(err.response?.data?.error || 'Registration failed');
+            setError(err.response?.data?.error || 'ההרשמה נכשלה');
         } finally {
             setLoading(false);
         }
@@ -55,7 +55,7 @@ function Register() {
             <Box sx={{ mt: 8 }}>
                 <Paper elevation={3} sx={{ p: 4 }}>
                     <Typography variant="h4" component="h1" gutterBottom align="center">
-                        Register
+                        הרשמה
                     </Typography>
 
                     {error && (
@@ -66,7 +66,7 @@ function Register() {
 
                     <form onSubmit={handleSubmit}>
                         <TextField
-                            label="Full Name"
+                            label="שם מלא"
                             name="fullName"
                             fullWidth
                             margin="normal"
@@ -76,7 +76,7 @@ function Register() {
                         />
 
                         <TextField
-                            label="Email"
+                            label="אימייל"
                             name="email"
                             type="email"
                             fullWidth
@@ -87,7 +87,7 @@ function Register() {
                         />
 
                         <TextField
-                            label="Password"
+                            label="סיסמה"
                             name="password"
                             type="password"
                             fullWidth
@@ -95,7 +95,7 @@ function Register() {
                             value={formData.password}
                             onChange={handleChange}
                             required
-                            helperText="Minimum 6 characters"
+                            helperText="מינימום 6 תווים"
                         />
 
                         <Button
@@ -106,14 +106,14 @@ function Register() {
                             sx={{ mt: 3, mb: 2 }}
                             disabled={loading}
                         >
-                            {loading ? 'Registering...' : 'Register'}
+                            {loading ? 'נרשם...' : 'הרשם'}
                         </Button>
 
                         <Box sx={{ textAlign: 'center' }}>
                             <Typography variant="body2">
-                                Already have an account?{' '}
+                                כבר יש לך חשבון?{' '}
                                 <Link to="/login" style={{ textDecoration: 'none' }}>
-                                    Login
+                                    התחבר
                                 </Link>
                             </Typography>
                         </Box>

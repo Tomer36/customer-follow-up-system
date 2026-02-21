@@ -21,6 +21,19 @@ import {
 } from '@mui/material';
 import { customersAPI, groupsAPI, tasksAPI } from '../services/api';
 
+const statusLabels = {
+    open: 'פתוחה',
+    done: 'הושלמה',
+    postponed: 'נדחתה'
+};
+
+const priorityLabels = {
+    low: 'נמוכה',
+    medium: 'בינונית',
+    high: 'גבוהה',
+    urgent: 'דחופה'
+};
+
 function TasksList() {
     const queryClient = useQueryClient();
     const [form, setForm] = useState({
@@ -87,20 +100,20 @@ function TasksList() {
         <Container maxWidth="lg">
             <Box sx={{ mt: 4, mb: 4 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
-                    <Typography variant="h4">Tasks</Typography>
+                    <Typography variant="h4">משימות</Typography>
                     <Box>
-                        <Button component={Link} to="/dashboard" variant="outlined" sx={{ mr: 1 }}>Dashboard</Button>
-                        <Button component={Link} to="/customers" variant="outlined">Customers</Button>
+                        <Button component={Link} to="/dashboard" variant="outlined" sx={{ mr: 1 }}>לוח בקרה</Button>
+                        <Button component={Link} to="/customers" variant="outlined">לקוחות</Button>
                     </Box>
                 </Box>
 
                 <Paper sx={{ p: 2, mb: 2 }}>
-                    <Typography variant="h6" sx={{ mb: 2 }}>Add Task</Typography>
+                    <Typography variant="h6" sx={{ mb: 2 }}>הוספת משימה</Typography>
                     <Box component="form" onSubmit={handleCreateTask}>
                         <Stack spacing={2}>
                             <TextField
                                 name="title"
-                                label="Task Title"
+                                label="כותרת משימה"
                                 value={form.title}
                                 onChange={handleFormChange}
                                 required
@@ -109,7 +122,7 @@ function TasksList() {
                                 <TextField
                                     select
                                     name="customer_id"
-                                    label="Customer"
+                                    label="לקוח"
                                     value={form.customer_id}
                                     onChange={handleFormChange}
                                     required
@@ -124,12 +137,12 @@ function TasksList() {
                                 <TextField
                                     select
                                     name="group_id"
-                                    label="Group"
+                                    label="קבוצה"
                                     value={form.group_id}
                                     onChange={handleFormChange}
                                     fullWidth
                                 >
-                                    <MenuItem value="">No Group</MenuItem>
+                                    <MenuItem value="">ללא קבוצה</MenuItem>
                                     {groups.map((group) => (
                                         <MenuItem key={group.id} value={group.id}>
                                             {group.name}
@@ -141,20 +154,20 @@ function TasksList() {
                                 <TextField
                                     select
                                     name="priority"
-                                    label="Priority"
+                                    label="עדיפות"
                                     value={form.priority}
                                     onChange={handleFormChange}
                                     fullWidth
                                 >
-                                    <MenuItem value="low">Low</MenuItem>
-                                    <MenuItem value="medium">Medium</MenuItem>
-                                    <MenuItem value="high">High</MenuItem>
-                                    <MenuItem value="urgent">Urgent</MenuItem>
+                                    <MenuItem value="low">נמוכה</MenuItem>
+                                    <MenuItem value="medium">בינונית</MenuItem>
+                                    <MenuItem value="high">גבוהה</MenuItem>
+                                    <MenuItem value="urgent">דחופה</MenuItem>
                                 </TextField>
                                 <TextField
                                     type="date"
                                     name="due_date"
-                                    label="Due Date"
+                                    label="תאריך יעד"
                                     value={form.due_date}
                                     onChange={handleFormChange}
                                     InputLabelProps={{ shrink: true }}
@@ -164,7 +177,7 @@ function TasksList() {
                             </Stack>
                             <TextField
                                 name="description"
-                                label="Description"
+                                label="תיאור"
                                 value={form.description}
                                 onChange={handleFormChange}
                                 multiline
@@ -172,19 +185,19 @@ function TasksList() {
                             />
                             <Box>
                                 <Button type="submit" variant="contained" disabled={createTaskMutation.isPending}>
-                                    {createTaskMutation.isPending ? 'Saving...' : 'Create Task'}
+                                    {createTaskMutation.isPending ? 'שומר...' : 'צור משימה'}
                                 </Button>
                             </Box>
                         </Stack>
                     </Box>
                     {createTaskMutation.isSuccess && (
                         <Alert severity="success" sx={{ mt: 2 }}>
-                            Task created successfully.
+                            המשימה נוצרה בהצלחה
                         </Alert>
                     )}
                     {createTaskMutation.isError && (
                         <Alert severity="error" sx={{ mt: 2 }}>
-                            {createTaskMutation.error?.response?.data?.error || 'Failed to create task.'}
+                            {createTaskMutation.error?.response?.data?.error || 'יצירת המשימה נכשלה'}
                         </Alert>
                     )}
                 </Paper>
@@ -193,37 +206,37 @@ function TasksList() {
                     {isLoading ? (
                         <Box sx={{ textAlign: 'center', p: 4 }}><CircularProgress /></Box>
                     ) : isError ? (
-                        <Alert severity="error">{error?.response?.data?.error || 'Failed to load tasks.'}</Alert>
+                        <Alert severity="error">{error?.response?.data?.error || 'טעינת המשימות נכשלה'}</Alert>
                     ) : (
                         <Table size="small">
                             <TableHead>
                                 <TableRow>
-                                    <TableCell>Title</TableCell>
-                                    <TableCell>Status</TableCell>
-                                    <TableCell>Priority</TableCell>
-                                    <TableCell>Customer</TableCell>
-                                    <TableCell>Group</TableCell>
-                                    <TableCell>Due Date</TableCell>
-                                    <TableCell align="right">Actions</TableCell>
+                                    <TableCell>כותרת</TableCell>
+                                    <TableCell>סטטוס</TableCell>
+                                    <TableCell>עדיפות</TableCell>
+                                    <TableCell>לקוח</TableCell>
+                                    <TableCell>קבוצה</TableCell>
+                                    <TableCell>תאריך יעד</TableCell>
+                                    <TableCell align="right">פעולות</TableCell>
                                 </TableRow>
                             </TableHead>
                             <TableBody>
                                 {tasks.map((task) => (
                                     <TableRow key={task.id}>
                                         <TableCell>{task.title}</TableCell>
-                                        <TableCell>{task.status}</TableCell>
-                                        <TableCell>{task.priority}</TableCell>
+                                        <TableCell>{statusLabels[task.status] || task.status}</TableCell>
+                                        <TableCell>{priorityLabels[task.priority] || task.priority}</TableCell>
                                         <TableCell>{task.customer_name || '-'}</TableCell>
                                         <TableCell>{task.group_name || '-'}</TableCell>
-                                        <TableCell>{task.due_date ? new Date(task.due_date).toLocaleDateString() : '-'}</TableCell>
+                                        <TableCell>{task.due_date ? new Date(task.due_date).toLocaleDateString('he-IL') : '-'}</TableCell>
                                         <TableCell align="right">
-                                            <Button component={Link} to={`/tasks/${task.id}`} size="small">View</Button>
+                                            <Button component={Link} to={`/tasks/${task.id}`} size="small">צפה</Button>
                                         </TableCell>
                                     </TableRow>
                                 ))}
                                 {tasks.length === 0 && (
                                     <TableRow>
-                                        <TableCell colSpan={7} align="center">No tasks found.</TableCell>
+                                        <TableCell colSpan={7} align="center">לא נמצאו משימות</TableCell>
                                     </TableRow>
                                 )}
                             </TableBody>

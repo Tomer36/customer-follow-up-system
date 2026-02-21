@@ -13,6 +13,7 @@ import TasksList from './pages/TasksList';
 import TaskDetail from './pages/TaskDetail';
 
 const theme = createTheme({
+    direction: 'rtl',
     palette: {
         primary: {
             main: '#1976d2',
@@ -27,55 +28,57 @@ function App() {
     return (
         <ThemeProvider theme={theme}>
             <CssBaseline />
-            <AuthProvider>
-                <BrowserRouter>
-                    <Routes>
-                        <Route path="/login" element={<Login />} />
-                        <Route path="/register" element={<Register />} />
-                        <Route
-                            path="/dashboard"
-                            element={
-                                <PrivateRoute>
-                                    <Dashboard />
-                                </PrivateRoute>
-                            }
-                        />
-                        <Route
-                            path="/customers"
-                            element={
-                                <PrivateRoute>
-                                    <CustomersList />
-                                </PrivateRoute>
-                            }
-                        />
-                        <Route
-                            path="/customers/:id"
-                            element={
-                                <PrivateRoute>
-                                    <CustomerDetail />
-                                </PrivateRoute>
-                            }
-                        />
-                        <Route
-                            path="/tasks"
-                            element={
-                                <PrivateRoute>
-                                    <TasksList />
-                                </PrivateRoute>
-                            }
-                        />
-                        <Route
-                            path="/tasks/:id"
-                            element={
-                                <PrivateRoute>
-                                    <TaskDetail />
-                                </PrivateRoute>
-                            }
-                        />
-                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                    </Routes>
-                </BrowserRouter>
-            </AuthProvider>
+            <div dir="rtl">
+                <AuthProvider>
+                    <BrowserRouter>
+                        <Routes>
+                            <Route path="/login" element={<Login />} />
+                            <Route path="/register" element={<Register />} />
+                            <Route
+                                path="/dashboard"
+                                element={
+                                    <PrivateRoute>
+                                        <Dashboard />
+                                    </PrivateRoute>
+                                }
+                            />
+                            <Route
+                                path="/customers"
+                                element={
+                                    <PrivateRoute>
+                                        <CustomersList />
+                                    </PrivateRoute>
+                                }
+                            />
+                            <Route
+                                path="/customers/:id"
+                                element={
+                                    <PrivateRoute>
+                                        <CustomerDetail />
+                                    </PrivateRoute>
+                                }
+                            />
+                            <Route
+                                path="/tasks"
+                                element={
+                                    <PrivateRoute>
+                                        <TasksList />
+                                    </PrivateRoute>
+                                }
+                            />
+                            <Route
+                                path="/tasks/:id"
+                                element={
+                                    <PrivateRoute>
+                                        <TaskDetail />
+                                    </PrivateRoute>
+                                }
+                            />
+                            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                        </Routes>
+                    </BrowserRouter>
+                </AuthProvider>
+            </div>
         </ThemeProvider>
     );
 }

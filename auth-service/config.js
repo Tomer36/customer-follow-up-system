@@ -15,7 +15,15 @@ const config = {
     jwt: {
         secret: process.env.JWT_SECRET || 'default_secret_change_me',
         expiresIn: '24h'
+    },
+
+    externalApi: {
+        customersUrl: process.env.EXTERNAL_CUSTOMERS_API_URL || 'http://localhost:5000/hashAPI/route-hashAPI/175',
+        customerDetailsUrl: process.env.EXTERNAL_CUSTOMER_DETAILS_API_URL || 'http://localhost:5000/hashAPI/route-hashAPI/184',
+        token: process.env.EXTERNAL_CUSTOMERS_API_TOKEN || '',
+        timeoutMs: parseInt(process.env.EXTERNAL_CUSTOMERS_API_TIMEOUT_MS || '30000')
     }
 };
 
 export default config;
+
