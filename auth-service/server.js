@@ -288,16 +288,15 @@ app.get('/api/customers', auth, async (req, res) => {
     }
 });
 
-const fetchReport175Payload = async () => {
-    const sourceUrl = config.externalApi.customersUrl;
+const fetchExternalReportPayload = async (sourceUrl, payloadBody = null, timeoutMs = config.externalApi.timeoutMs) => {
     if (!sourceUrl) {
-        const err = new Error('External API URL is missing. Set EXTERNAL_CUSTOMERS_API_URL in .env');
+        const err = new Error('External API URL is missing. Check external report URLs in .env');
         err.status = 500;
         throw err;
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), config.externalApi.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
         const headers = { Accept: 'application/json', 'Content-Type': 'application/json' };
@@ -308,9 +307,7 @@ const fetchReport175Payload = async () => {
         const response = await fetch(sourceUrl, {
             method: 'POST',
             headers,
-            body: JSON.stringify({
-                dateFrom: '01/01/2020'
-            }),
+            body: JSON.stringify(payloadBody || { dateFrom: '01/01/2020' }),
             signal: controller.signal
         });
 
@@ -329,7 +326,7 @@ const fetchReport175Payload = async () => {
             throw err;
         }
         if (error?.name === 'AbortError') {
-            const err = new Error(`External API timeout after ${config.externalApi.timeoutMs}ms`);
+            const err = new Error(`External API timeout after ${timeoutMs}ms`);
             err.status = 504;
             throw err;
         }
@@ -339,8 +336,12 @@ const fetchReport175Payload = async () => {
     }
 };
 
+const fetchReport175Payload = async () => fetchExternalReportPayload(config.externalApi.report175Url, { dateFrom: '01/01/2020' }, config.externalApi.timeoutMs);
+const fetchReport198Payload = async () => fetchExternalReportPayload(config.externalApi.report198Url, { dateFrom: '01/01/2020' }, config.externalApi.report198TimeoutMs);
+const fetchReport176Payload = async () => fetchExternalReportPayload(config.externalApi.report176Url, { dateFrom: '01/01/2020' }, config.externalApi.timeoutMs);
+
 const fetchReport184Payload = async (customer) => {
-    const sourceUrl = config.externalApi.customerDetailsUrl || config.externalApi.customersUrl;
+    const sourceUrl = config.externalApi.customerDetailsUrl || config.externalApi.report175Url;
     if (!sourceUrl) return null;
 
     const controller = new AbortController();
@@ -436,6 +437,30 @@ const extractReport175Rows = (payload) => {
     return best;
 };
 
+const rowLooksLikeReport198 = (row) =>
+    row &&
+    typeof row === 'object' &&
+    (
+        Object.prototype.hasOwnProperty.call(row, '\u05de\u05e4\u05ea\u05d7 \u05d7\u05e9\u05d1\u05d5\u05df') ||
+        Object.prototype.hasOwnProperty.call(row, '\u05e9\u05dd \u05d7\u05e9\u05d1\u05d5\u05df')
+    );
+
+const rowLooksLikeReport176 = (row) =>
+    row &&
+    typeof row === 'object' &&
+    (
+        Object.prototype.hasOwnProperty.call(row, '\u05e9\u05dd \u05d0\u05d9\u05e9 \u05e7\u05e9\u05e8') ||
+        Object.prototype.hasOwnProperty.call(row, '\u05d8\u05dc\u05e4\u05d5\u05df \u05e0\u05d9\u05d9\u05d3') ||
+        Object.prototype.hasOwnProperty.call(row, '\u05d3\u05d5\u05d0"\u05dc')
+    );
+
+const extractReportRowsByPredicate = (payload, predicate) => {
+    const rows = extractReport175Rows(payload);
+    if (!rows.length) return [];
+    const matching = rows.filter((row) => row && typeof row === 'object' && predicate(row));
+    return matching.length ? matching : rows.filter((row) => row && typeof row === 'object');
+};
+
 const pickReportRowForCustomer = (rows, customer) => {
     if (!Array.isArray(rows) || rows.length === 0) return null;
 
@@ -494,6 +519,42 @@ const mapReport175Row = (row) => {
         obligo_limit: toReport175Number(pickReport175Value(row, ['\u05ea\u05e7\u05e8\u05ea \u05d0\u05d5\u05d1\u05dc\u05d9\u05d2\u05d5'])),
         obligo_deviation: toReport175Number(pickReport175Value(row, ['\u05d7\u05e8\u05d9\u05d2\u05d4 \u05de\u05d0\u05d5\u05d1\u05dc\u05d9\u05d2\u05d5'])),
         raw_payload: JSON.stringify(row)
+    };
+};
+
+const mapReport198Row = (row) => {
+    const accountKey = String(pickReport175Value(row, ['\u05de\u05e4\u05ea\u05d7 \u05d7\u05e9\u05d1\u05d5\u05df']) ?? '').trim();
+    const accountName = String(pickReport175Value(row, ['\u05e9\u05dd \u05d7\u05e9\u05d1\u05d5\u05df']) ?? '').trim();
+    const email = String(pickReport175Value(row, ['\u05d3\u05d5\u05d0"\u05dc', 'email', 'Email']) ?? '').trim();
+    const phone = String(pickReport175Value(row, ['\u05d8\u05dc\u05e4\u05d5\u05df', 'phone', 'Phone']) ?? '').trim();
+    const mobilePhone = String(pickReport175Value(row, ['\u05d8\u05dc\u05e4\u05d5\u05df \u05e0\u05d9\u05d9\u05d3', 'mobile', 'Mobile']) ?? '').trim();
+    const accountCardNumber = toReport175Number(pickReport175Value(row, ['\u05de\u05e1\u05e4\u05e8 \u05db\u05e8\u05d8\u05d9\u05e1 \u05d7\u05e9\u05d1\u05d5\u05df']));
+
+    return {
+        external_id: accountCardNumber > 0 ? String(accountCardNumber) : null,
+        account_key: accountKey || null,
+        account_name: accountName || null,
+        email: email || null,
+        phone: phone || null,
+        mobile_phone: mobilePhone || null
+    };
+};
+
+const mapReport176Row = (row) => {
+    const accountKey = String(pickReport175Value(row, ['\u05de\u05e4\u05ea\u05d7 \u05d7\u05e9\u05d1\u05d5\u05df']) ?? '').trim();
+    const accountName = String(pickReport175Value(row, ['\u05e9\u05dd \u05d7\u05e9\u05d1\u05d5\u05df']) ?? '').trim();
+    const contactName = String(pickReport175Value(row, ['\u05e9\u05dd \u05d0\u05d9\u05e9 \u05e7\u05e9\u05e8']) ?? '').trim();
+    const email = String(pickReport175Value(row, ['\u05d3\u05d5\u05d0"\u05dc']) ?? '').trim();
+    const phone = String(pickReport175Value(row, ['\u05d8\u05dc\u05e4\u05d5\u05df']) ?? '').trim();
+    const mobilePhone = String(pickReport175Value(row, ['\u05d8\u05dc\u05e4\u05d5\u05df \u05e0\u05d9\u05d9\u05d3']) ?? '').trim();
+
+    return {
+        account_key: accountKey || null,
+        account_name: accountName || null,
+        contact_name: contactName || null,
+        email: email || null,
+        phone: phone || null,
+        mobile_phone: mobilePhone || null
     };
 };
 
@@ -671,6 +732,11 @@ const getEligibleCustomerIdsByFilters = async (userId, managedBy, groupId) => {
 let report175CacheRows = [];
 let report175CacheByExternalId = new Map();
 let report175CacheSyncedAt = null;
+let report198CacheByAccountKey = new Map();
+let report198CacheByExternalId = new Map();
+let report198CacheSyncedAt = null;
+let report176CacheByAccountKey = new Map();
+let report176CacheSyncedAt = null;
 
 const setReport175Cache = (rows) => {
     const safeRows = Array.isArray(rows) ? rows : [];
@@ -681,6 +747,83 @@ const setReport175Cache = (rows) => {
             .map((row) => [String(row.external_id), row])
     );
     report175CacheSyncedAt = new Date().toISOString();
+};
+
+const setReport198Cache = (rows) => {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    report198CacheByAccountKey = new Map();
+    report198CacheByExternalId = new Map();
+
+    for (const row of safeRows) {
+        if (!row) continue;
+        if (row.account_key) report198CacheByAccountKey.set(String(row.account_key), row);
+        if (row.external_id) report198CacheByExternalId.set(String(row.external_id), row);
+    }
+    report198CacheSyncedAt = new Date().toISOString();
+};
+
+const setReport176Cache = (rows) => {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    report176CacheByAccountKey = new Map();
+    for (const row of safeRows) {
+        if (!row || !row.account_key) continue;
+        report176CacheByAccountKey.set(String(row.account_key), row);
+    }
+    report176CacheSyncedAt = new Date().toISOString();
+};
+
+const getEnrichmentForWorkRow = (workRow) => {
+    const accountKey = String(workRow?.account_key || '');
+    const externalId = String(workRow?.external_id || '');
+    const from198 = report198CacheByAccountKey.get(accountKey) || report198CacheByExternalId.get(externalId) || null;
+    const from176 = report176CacheByAccountKey.get(accountKey) || null;
+
+    return {
+        account_name: from176?.account_name || from198?.account_name || workRow?.account_name || null,
+        contact_name: from176?.contact_name || null,
+        email: from176?.email || from198?.email || null,
+        phone: from176?.phone || from198?.phone || null,
+        mobile_phone: from176?.mobile_phone || from198?.mobile_phone || null
+    };
+};
+
+const normalizeTextSearch = (value) => String(value || '').toLowerCase().trim();
+const normalizePhoneSearch = (value) => String(value || '').replace(/\D+/g, '');
+
+const rowMatchesSearch = (workRow, search) => {
+    if (!search) return true;
+    const enriched = getEnrichmentForWorkRow(workRow);
+    const normalizedSearchText = normalizeTextSearch(search);
+    const normalizedSearchPhone = normalizePhoneSearch(search);
+
+    const textHaystack = [
+        workRow?.account_key,
+        workRow?.account_name,
+        workRow?.account_card_number,
+        enriched.account_name,
+        enriched.contact_name,
+        enriched.email,
+        enriched.phone,
+        enriched.mobile_phone,
+        workRow?.phone
+    ]
+        .map((v) => normalizeTextSearch(v))
+        .join(' ');
+
+    if (textHaystack.includes(normalizedSearchText)) return true;
+
+    if (normalizedSearchPhone) {
+        const phoneCandidates = [
+            enriched.mobile_phone,
+            enriched.phone,
+            workRow?.phone
+        ]
+            .map((v) => normalizePhoneSearch(v))
+            .filter(Boolean);
+        return phoneCandidates.some((phone) => phone.includes(normalizedSearchPhone));
+    }
+
+    return false;
 };
 
 // Get report 175 customers
@@ -695,13 +838,7 @@ app.get('/api/customers/reports/175', auth, async (req, res) => {
         const balanceMode = String(req.query.balanceMode || 'balance_non_zero');
 
         const baseRows = report175CacheRows
-            .filter((row) => {
-                if (!search) return true;
-                return (
-                    String(row.account_name || '').toLowerCase().includes(search) ||
-                    String(row.account_key || '').toLowerCase().includes(search)
-                );
-            });
+            .filter((row) => rowMatchesSearch(row, search));
 
         const applyBalanceMode = (row) => {
             if (balanceMode === 'balance_zero') {
@@ -781,9 +918,15 @@ app.get('/api/customers/reports/175', auth, async (req, res) => {
             : filteredRowsWithHandling;
 
         const hydratedRows = pagedRows.map((row, idx) => {
+            const enriched = getEnrichmentForWorkRow(row);
             return {
                 id: offset + idx + 1,
                 ...row,
+                account_name: enriched.account_name || row.account_name,
+                contact_name: enriched.contact_name,
+                email: enriched.email,
+                phone: enriched.phone,
+                mobile_phone: enriched.mobile_phone
             };
         });
 
@@ -796,7 +939,9 @@ app.get('/api/customers/reports/175', auth, async (req, res) => {
                 totalPages: Math.max(1, Math.ceil((needsHandlingFilters ? filteredRowsWithHandling.length : balanceFilteredRows.length) / limit))
             },
             cache: {
-                syncedAt: report175CacheSyncedAt
+                syncedAt: report175CacheSyncedAt,
+                report198SyncedAt: report198CacheSyncedAt,
+                report176SyncedAt: report176CacheSyncedAt
             }
         });
     } catch (error) {
@@ -808,19 +953,42 @@ app.get('/api/customers/reports/175', auth, async (req, res) => {
 // Sync customers (report 175 direct call)
 app.post('/api/customers/sync', auth, async (req, res) => {
     try {
-        const payload = await fetchReport175Payload();
-        const rows = extractReport175Rows(payload)
+        const payload175 = await fetchReport175Payload();
+        const rows175 = extractReport175Rows(payload175)
             .filter((row) => row && typeof row === 'object')
             .map(mapReport175Row);
 
-        const result = await upsertReport175Rows(rows, req.userId);
-        setReport175Cache(rows);
+        const result175 = await upsertReport175Rows(rows175, req.userId);
+        setReport175Cache(rows175);
+
+        let rows198 = [];
+        let rows176 = [];
+        const warnings = [];
+
+        try {
+            const payload198 = await fetchReport198Payload();
+            rows198 = extractReportRowsByPredicate(payload198, rowLooksLikeReport198).map(mapReport198Row);
+            setReport198Cache(rows198);
+        } catch (err) {
+            warnings.push(`Failed to sync report 198: ${err?.message || 'Unknown error'}`);
+        }
+
+        try {
+            const payload176 = await fetchReport176Payload();
+            rows176 = extractReportRowsByPredicate(payload176, rowLooksLikeReport176).map(mapReport176Row);
+            setReport176Cache(rows176);
+        } catch (err) {
+            warnings.push(`Failed to sync report 176: ${err?.message || 'Unknown error'}`);
+        }
 
         return res.json({
-            message: 'Report 175 fetched successfully.',
-            received: rows.length,
-            synced: result.synced,
-            syncedAt: report175CacheSyncedAt
+            message: warnings.length ? 'Sync completed with warnings.' : 'Sync completed successfully.',
+            synced: {
+                report175: { received: rows175.length, upserted: result175.synced, syncedAt: report175CacheSyncedAt },
+                report198: { received: rows198.length, syncedAt: report198CacheSyncedAt },
+                report176: { received: rows176.length, syncedAt: report176CacheSyncedAt }
+            },
+            warnings
         });
     } catch (error) {
         console.error('Sync customers error:', error);
@@ -857,6 +1025,8 @@ app.get('/api/customers/:id', auth, async (req, res) => {
             };
         }
 
+        const enriched = getEnrichmentForWorkRow(report175);
+
         const [latestRows] = await pool.execute(`
             SELECT
                 n.created_at as payment_start,
@@ -876,6 +1046,12 @@ app.get('/api/customers/:id', auth, async (req, res) => {
             customer: {
                 ...customer,
                 report175,
+                profile: {
+                    account_name: enriched.account_name || customer.name || null,
+                    contact_name: enriched.contact_name || null,
+                    email: enriched.email || customer.email || null,
+                    phone: enriched.mobile_phone || enriched.phone || customer.phone || null
+                },
                 payment_start: latest?.payment_start || null,
                 payment_target: latest?.payment_target || null,
                 managed_by_name: latest?.managed_by_name || null,

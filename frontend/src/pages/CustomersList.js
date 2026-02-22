@@ -94,7 +94,7 @@ function CustomersList() {
                         <TextField
                             fullWidth
                             size="small"
-                            label="חיפוש לפי שם לקוח או מפתח חשבון"
+                            label="חיפוש לפי שם לקוח, מפתח חשבון או טלפון"
                             value={searchInput}
                             onChange={(event) => setSearchInput(event.target.value)}
                         />

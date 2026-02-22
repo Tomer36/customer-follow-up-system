@@ -18,10 +18,13 @@ const config = {
     },
 
     externalApi: {
-        customersUrl: process.env.EXTERNAL_CUSTOMERS_API_URL || 'http://localhost:5000/hashAPI/route-hashAPI/175',
+        report175Url: process.env.EXTERNAL_REPORT_175_API_URL || process.env.EXTERNAL_CUSTOMERS_API_URL || 'http://localhost:5000/hashAPI/route-hashAPI/175',
+        report198Url: process.env.EXTERNAL_REPORT_198_API_URL || 'http://localhost:5000/hashAPI/route-hashAPI/198',
+        report176Url: process.env.EXTERNAL_REPORT_176_API_URL || 'http://localhost:5000/hashAPI/route-hashAPI/176',
         customerDetailsUrl: process.env.EXTERNAL_CUSTOMER_DETAILS_API_URL || 'http://localhost:5000/hashAPI/route-hashAPI/184',
         token: process.env.EXTERNAL_CUSTOMERS_API_TOKEN || '',
-        timeoutMs: parseInt(process.env.EXTERNAL_CUSTOMERS_API_TIMEOUT_MS || '30000')
+        timeoutMs: parseInt(process.env.EXTERNAL_CUSTOMERS_API_TIMEOUT_MS || '30000'),
+        report198TimeoutMs: parseInt(process.env.EXTERNAL_REPORT_198_TIMEOUT_MS || process.env.EXTERNAL_CUSTOMERS_API_TIMEOUT_MS || '120000')
     }
 };
 
