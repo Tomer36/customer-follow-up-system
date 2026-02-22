@@ -133,7 +133,7 @@ function CustomersList() {
                 )}
 
                 <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems="stretch">
-                    <Paper sx={{ flex: 1 }}>
+                    <Paper sx={{ flex: 1, order: { xs: 1, md: 2 } }}>
                         {isLoading ? (
                             <Box sx={{ p: 4, textAlign: 'center' }}>
                                 <CircularProgress />
@@ -193,7 +193,7 @@ function CustomersList() {
                         )}
                     </Paper>
 
-                    <Paper sx={{ width: { xs: '100%', md: 280 }, p: 2 }}>
+                    <Paper sx={{ width: { xs: '100%', md: 280 }, p: 2, order: { xs: 2, md: 1 } }}>
                         <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
                             תנאי הצגה
                         </Typography>
@@ -208,17 +208,12 @@ function CustomersList() {
                                 <FormControlLabel
                                     value="balance_non_zero"
                                     control={<Radio />}
-                                    label="יתרת חשבון שונה מ-0"
+                                    label="הכל בלי יתרה אפס"
                                 />
                                 <FormControlLabel
                                     value="balance_zero"
                                     control={<Radio />}
-                                    label="יתרת חשבון שווה ל-0"
-                                />
-                                <FormControlLabel
-                                    value="balance_zero_obligo_non_zero"
-                                    control={<Radio />}
-                                    label="יתרת חשבון 0 וסה''כ אובליגו שונה מ-0"
+                                    label="הכל כולל יתרה אפס"
                                 />
                             </RadioGroup>
                         </FormControl>

@@ -707,9 +707,6 @@ app.get('/api/customers/reports/175', auth, async (req, res) => {
             if (balanceMode === 'balance_zero') {
                 return Number(row.account_balance || 0) === 0;
             }
-            if (balanceMode === 'balance_zero_obligo_non_zero') {
-                return Number(row.account_balance || 0) === 0 && Number(row.total_obligo || 0) !== 0;
-            }
             return Number(row.account_balance || 0) !== 0;
         };
 
