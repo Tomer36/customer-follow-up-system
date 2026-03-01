@@ -25,6 +25,7 @@ import {
     InputLabel
 } from '@mui/material';
 import { customersAPI, groupsAPI, usersAPI } from '../services/api';
+import CustomerDetailsPanel from '../components/CustomerDetailsPanel';
 
 const formatDate = (value) => (value ? new Date(value).toLocaleDateString('he-IL') : '-');
 const formatNumber = (value) => Number(value || 0).toFixed(2);
@@ -37,6 +38,7 @@ function CustomersList() {
     const [managedBy, setManagedBy] = useState('');
     const [groupId, setGroupId] = useState('');
     const [balanceMode, setBalanceMode] = useState('balance_non_zero');
+    const [selectedCustomerId, setSelectedCustomerId] = useState(null);
 
     const { data, isLoading, isError, error } = useQuery({
         queryKey: ['customers', page, search, managedBy, groupId, balanceMode],
@@ -74,6 +76,11 @@ function CustomersList() {
     const handleFiltersChange = (setter) => (event) => {
         setPage(1);
         setter(event.target.value);
+    };
+
+    const openCustomerInPlace = (customerId) => {
+        if (!customerId) return;
+        setSelectedCustomerId(customerId);
     };
 
     return (
@@ -120,6 +127,16 @@ function CustomersList() {
                     </Stack>
                 </Box>
 
+                {selectedCustomerId && (
+                    <Paper sx={{ p: 2, mb: 2 }}>
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                            <Typography variant="h6">פרטי לקוח</Typography>
+                            <Button variant="outlined" onClick={() => setSelectedCustomerId(null)}>סגור</Button>
+                        </Stack>
+                        <CustomerDetailsPanel customerId={selectedCustomerId} />
+                    </Paper>
+                )}
+
                 {syncMutation.isSuccess && (
                     <Alert severity="success" sx={{ mb: 2 }}>
                         {syncMutation.data?.message || 'הסנכרון הושלם'}
@@ -160,8 +177,7 @@ function CustomersList() {
                                                 <TableCell>{customer.account_key || '-'}</TableCell>
                                                 <TableCell>
                                                     <Button
-                                                        component={Link}
-                                                        to={`/customers/${customer.customer_id}`}
+                                                        onClick={() => openCustomerInPlace(customer.customer_id)}
                                                         size="small"
                                                         disabled={!customer.customer_id}
                                                     >
@@ -220,6 +236,7 @@ function CustomersList() {
                     </Paper>
                 </Stack>
             </Box>
+
         </Container>
     );
 }

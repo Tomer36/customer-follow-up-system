@@ -339,10 +339,23 @@ const fetchExternalReportPayload = async (sourceUrl, payloadBody = null, timeout
 const fetchReport175Payload = async () => fetchExternalReportPayload(config.externalApi.report175Url, { dateFrom: '01/01/2020' }, config.externalApi.timeoutMs);
 const fetchReport198Payload = async () => fetchExternalReportPayload(config.externalApi.report198Url, { dateFrom: '01/01/2020' }, config.externalApi.report198TimeoutMs);
 const fetchReport176Payload = async () => fetchExternalReportPayload(config.externalApi.report176Url, { dateFrom: '01/01/2020' }, config.externalApi.timeoutMs);
+const fetchReport180Payload = async (customer) => {
+    const sourceUrl = config.externalApi.report180Url;
+    if (!sourceUrl) return null;
+
+    const clientNumber = String(customer?.company || '').trim() || String(customer?.external_id || '').trim() || null;
+
+    const payload = {
+        clientNumber
+    };
+
+    return fetchExternalReportPayload(sourceUrl, payload, config.externalApi.report198TimeoutMs || config.externalApi.timeoutMs);
+};
 
 const fetchReport184Payload = async (customer) => {
     const sourceUrl = config.externalApi.customerDetailsUrl || config.externalApi.report175Url;
     if (!sourceUrl) return null;
+    const clientNumber = String(customer?.company || '').trim() || String(customer?.external_id || '').trim() || null;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.externalApi.timeoutMs);
@@ -354,8 +367,7 @@ const fetchReport184Payload = async (customer) => {
         }
 
         const payload = {
-            accountKey: customer?.company || null,
-            externalId: customer?.external_id || null
+            clientNumber
         };
 
         const response = await fetch(sourceUrl, {
@@ -558,6 +570,42 @@ const mapReport176Row = (row) => {
     };
 };
 
+const fetchReport185Payload = async (customer) => {
+    const sourceUrl = config.externalApi.report185Url;
+    if (!sourceUrl) return null;
+    const clientNumber = String(customer?.company || '').trim() || String(customer?.external_id || '').trim() || null;
+
+    const payload = {
+        clientNumber
+    };
+
+    return fetchExternalReportPayload(sourceUrl, payload, config.externalApi.timeoutMs);
+};
+
+const mapReport180Row = (row) => {
+    if (!row || typeof row !== 'object') return null;
+    return {
+        title: row['כותרת'] ?? null,
+        movement: row['תנועה'] ?? null,
+        batch: row['מנה'] ?? null,
+        entry_type: row['ס"ת'] ?? null,
+        account_key: row['מפתח חשבון'] ?? null,
+        account_name: row['שם חשבון'] ?? null,
+        counter_account: row['ח-ן נגדי'] ?? null,
+        counter_account_name: row['שם חשבון נגדי'] ?? null,
+        asmach_date: row['ת.אסמכ'] ?? null,
+        value_date: row['ת.ערך'] ?? null,
+        extra_date: row['תאריך 3'] ?? null,
+        asmach_1: row["אסמ'"] ?? null,
+        asmach_2: row["אסמ'2"] ?? null,
+        details: row['פרטים'] ?? null,
+        debit_ils: row['חובה שקל'] ?? null,
+        credit_ils: row['זכות שקל'] ?? null,
+        balance_ils: row['יתרה (שקל)'] ?? null,
+        inventory_id: row['מזהה מלאי'] ?? null
+    };
+};
+
 const upsertReport175Rows = async (rows, userId) => {
     if (rows.length === 0) return { synced: 0 };
 
@@ -737,6 +785,8 @@ let report198CacheByExternalId = new Map();
 let report198CacheSyncedAt = null;
 let report176CacheByAccountKey = new Map();
 let report176CacheSyncedAt = null;
+let report184CacheByCustomerId = new Map();
+let report185CacheByCustomerId = new Map();
 
 const setReport175Cache = (rows) => {
     const safeRows = Array.isArray(rows) ? rows : [];
@@ -789,6 +839,40 @@ const getEnrichmentForWorkRow = (workRow) => {
 
 const normalizeTextSearch = (value) => String(value || '').toLowerCase().trim();
 const normalizePhoneSearch = (value) => String(value || '').replace(/\D+/g, '');
+const extractObjectRows = (payload) => extractReport175Rows(payload).filter((row) => row && typeof row === 'object');
+
+const pickRawReportRowForCustomer = (rows, customer) => {
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+
+    const targetExternalId = String(customer?.external_id || '').trim();
+    const targetAccountKey = String(customer?.company || '').trim();
+
+    const byExternalId = rows.find((row) => {
+        const rowExternalId = String(
+            pickReport175Value(row, [
+                'מספר כרטיס חשבון',
+                '×ž×¡×¤×¨ ×›×¨×˜×™×¡ ×—×©×‘×•×Ÿ',
+                'Ã—Å¾Ã—Â¡Ã—Â¤Ã—Â¨ Ã—â€ºÃ—Â¨Ã—ËœÃ—â„¢Ã—Â¡ Ã—â€”Ã—Â©Ã—â€˜Ã—â€¢Ã—Å¸'
+            ]) ?? ''
+        ).trim();
+        return rowExternalId && rowExternalId === targetExternalId;
+    });
+    if (byExternalId) return byExternalId;
+
+    const byAccountKey = rows.find((row) => {
+        const rowAccountKey = String(
+            pickReport175Value(row, [
+                'מפתח חשבון',
+                '×ž×¤×ª×— ×—×©×‘×•×Ÿ',
+                'Ã—Å¾Ã—Â¤Ã—ÂªÃ—â€” Ã—â€”Ã—Â©Ã—â€˜Ã—â€¢Ã—Å¸'
+            ]) ?? ''
+        ).trim();
+        return rowAccountKey && rowAccountKey === targetAccountKey;
+    });
+    if (byAccountKey) return byAccountKey;
+
+    return rows[0] || null;
+};
 
 const rowMatchesSearch = (workRow, search) => {
     if (!search) return true;
@@ -1061,6 +1145,93 @@ app.get('/api/customers/:id', auth, async (req, res) => {
     } catch (error) {
         console.error('Get customer error:', error);
         res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Get report 184/185 basic details for one customer
+app.get('/api/customers/:id/basic-reports', auth, async (req, res) => {
+    try {
+        const [rows] = await pool.execute(`
+            SELECT c.*
+            FROM customers c
+            WHERE c.id = ?
+              AND ${getCustomerAccessCondition()}
+            LIMIT 1
+        `, [req.params.id, req.userId, req.userId]);
+        if (rows.length === 0) return res.status(404).json({ error: 'Customer not found' });
+
+        const customer = rows[0];
+        const customerId = Number(customer.id);
+
+        let payload184 = report184CacheByCustomerId.get(customerId) || null;
+        if (!payload184) {
+            payload184 = await fetchReport184Payload(customer);
+            if (payload184) report184CacheByCustomerId.set(customerId, payload184);
+        }
+
+        let payload185 = report185CacheByCustomerId.get(customerId) || null;
+        if (!payload185) {
+            payload185 = await fetchReport185Payload(customer);
+            if (payload185) report185CacheByCustomerId.set(customerId, payload185);
+        }
+
+        const rows184 = extractObjectRows(payload184);
+        const rows185 = extractObjectRows(payload185);
+
+        res.json({
+            customer: {
+                id: customer.id,
+                external_id: customer.external_id || null,
+                account_key: customer.company || null,
+                name: customer.name || null
+            },
+            report184: {
+                row: pickRawReportRowForCustomer(rows184, customer),
+                rowsCount: rows184.length
+            },
+            report185: {
+                row: pickRawReportRowForCustomer(rows185, customer),
+                rowsCount: rows185.length
+            }
+        });
+    } catch (error) {
+        console.error('Get basic reports error:', error);
+        res.status(error.status || 500).json({ error: error.message || 'Server error' });
+    }
+});
+
+// Get report 180 rows for one customer
+app.get('/api/customers/:id/report-180', auth, async (req, res) => {
+    try {
+        const [rows] = await pool.execute(`
+            SELECT c.*
+            FROM customers c
+            WHERE c.id = ?
+              AND ${getCustomerAccessCondition()}
+            LIMIT 1
+        `, [req.params.id, req.userId, req.userId]);
+
+        if (rows.length === 0) return res.status(404).json({ error: 'Customer not found' });
+
+        const customer = rows[0];
+        const payload180 = await fetchReport180Payload(customer);
+        const rawRows = extractReport175Rows(payload180)
+            .filter((row) => row && typeof row === 'object');
+
+        const normalizedRows = rawRows.map(mapReport180Row).filter(Boolean);
+
+        res.json({
+            customer: {
+                id: customer.id,
+                account_key: customer.company || null,
+                external_id: customer.external_id || null,
+                name: customer.name || null
+            },
+            rows: normalizedRows
+        });
+    } catch (error) {
+        console.error('Get report 180 error:', error);
+        res.status(error.status || 500).json({ error: error.message || 'Server error' });
     }
 });
 
