@@ -102,7 +102,7 @@ function TasksList() {
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
                     <Typography variant="h4">משימות</Typography>
                     <Box>
-                        <Button component={Link} to="/dashboard" variant="outlined" sx={{ mr: 1 }}>לוח בקרה</Button>
+                        <Button component={Link} to="/dashboard" variant="outlined" sx={{ ml: 1 }}>לוח בקרה</Button>
                         <Button component={Link} to="/customers" variant="outlined">לקוחות</Button>
                     </Box>
                 </Box>
