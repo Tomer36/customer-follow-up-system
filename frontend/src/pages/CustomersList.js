@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -95,11 +95,12 @@ const sortableColumns = {
 function CustomersList() {
     const navigate = useNavigate();
     const queryClient = useQueryClient();
-    const { logout } = useAuth();
+    const { logout, user, loading: authLoading } = useAuth();
     const [page, setPage] = useState(1);
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
     const [managedBy, setManagedBy] = useState('');
+    const [isManagerFilterReady, setIsManagerFilterReady] = useState(false);
     const [groupId, setGroupId] = useState('');
     const [balanceMode, setBalanceMode] = useState('balance_non_zero');
     const [selectedCustomerId, setSelectedCustomerId] = useState(null);
@@ -109,7 +110,8 @@ function CustomersList() {
     const { data, isLoading, isError, error } = useQuery({
         queryKey: ['customers', page, search, managedBy, groupId, balanceMode],
         queryFn: () => customersAPI.getReport175(page, search, 20, { managedBy, groupId, balanceMode }),
-        placeholderData: (previousData) => previousData
+        placeholderData: (previousData) => previousData,
+        enabled: isManagerFilterReady
     });
 
     const { data: usersData } = useQuery({
@@ -173,6 +175,12 @@ function CustomersList() {
         setter(event.target.value);
     };
 
+    useEffect(() => {
+        if (authLoading) return;
+        setManagedBy((currentValue) => (currentValue === '' && user?.id ? String(user.id) : currentValue));
+        setIsManagerFilterReady(true);
+    }, [authLoading, user?.id]);
+
     const openCustomerInPlace = (customerId) => {
         if (!customerId) return;
         setSelectedCustomerId(customerId);
@@ -192,6 +200,18 @@ function CustomersList() {
         logout();
         navigate('/login');
     };
+
+    if (!isManagerFilterReady) {
+        return (
+            <Box sx={pageShellSx}>
+                <Container maxWidth="xl">
+                    <Paper sx={{ ...glassCardSx, minHeight: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <CircularProgress />
+                    </Paper>
+                </Container>
+            </Box>
+        );
+    }
 
     return (
         <Box sx={pageShellSx}>
