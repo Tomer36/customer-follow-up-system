@@ -7,12 +7,8 @@ import { heIL } from '@mui/material/locale';
 import { AuthProvider } from './context/AuthContext';
 import PrivateRoute from './components/PrivateRoute';
 import Login from './pages/Login';
-import Register from './pages/Register';
-import Dashboard from './pages/Dashboard';
 import CustomersList from './pages/CustomersList';
 import CustomerDetail from './pages/CustomerDetail';
-import TasksList from './pages/TasksList';
-import TaskDetail from './pages/TaskDetail';
 
 const theme = createTheme({
     direction: 'rtl',
@@ -112,15 +108,6 @@ function App() {
                     <BrowserRouter>
                         <Routes>
                             <Route path="/login" element={<Login />} />
-                            <Route path="/register" element={<Register />} />
-                            <Route
-                                path="/dashboard"
-                                element={
-                                    <PrivateRoute>
-                                        <Dashboard />
-                                    </PrivateRoute>
-                                }
-                            />
                             <Route
                                 path="/customers"
                                 element={
@@ -137,23 +124,7 @@ function App() {
                                     </PrivateRoute>
                                 }
                             />
-                            <Route
-                                path="/tasks"
-                                element={
-                                    <PrivateRoute>
-                                        <TasksList />
-                                    </PrivateRoute>
-                                }
-                            />
-                            <Route
-                                path="/tasks/:id"
-                                element={
-                                    <PrivateRoute>
-                                        <TaskDetail />
-                                    </PrivateRoute>
-                                }
-                            />
-                            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                            <Route path="/" element={<Navigate to="/customers" replace />} />
                         </Routes>
                     </BrowserRouter>
                 </AuthProvider>

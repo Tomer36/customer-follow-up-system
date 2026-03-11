@@ -1,23 +1,36 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
-    Container,
-    Paper,
-    TextField,
-    Button,
-    Typography,
+    Alert,
     Box,
-    Alert
+    Button,
+    CircularProgress,
+    Container,
+    FormControl,
+    InputLabel,
+    MenuItem,
+    Paper,
+    Select,
+    TextField,
+    Typography
 } from '@mui/material';
 import { useAuth } from '../context/AuthContext';
+import { authAPI } from '../services/api';
 
 function Login() {
     const navigate = useNavigate();
     const { login } = useAuth();
-    const [email, setEmail] = useState('');
+    const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const { data: loginUsersData, isLoading: isUsersLoading } = useQuery({
+        queryKey: ['login-users'],
+        queryFn: () => authAPI.getLoginUsers()
+    });
+
+    const loginUsers = loginUsersData?.users || [];
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -25,8 +38,8 @@ function Login() {
         setLoading(true);
 
         try {
-            await login(email, password);
-            navigate('/dashboard');
+            await login(username, password);
+            navigate('/customers');
         } catch (err) {
             setError(err.response?.data?.error || 'ההתחברות נכשלה');
         } finally {
@@ -49,15 +62,21 @@ function Login() {
                     )}
 
                     <form onSubmit={handleSubmit}>
-                        <TextField
-                            label="אימייל"
-                            type="email"
-                            fullWidth
-                            margin="normal"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            required
-                        />
+                        <FormControl fullWidth margin="normal" required>
+                            <InputLabel>שם משתמש</InputLabel>
+                            <Select
+                                label="שם משתמש"
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
+                                disabled={isUsersLoading}
+                            >
+                                {loginUsers.map((user) => (
+                                    <MenuItem key={user.id} value={user.username}>
+                                        {user.username}
+                                    </MenuItem>
+                                ))}
+                            </Select>
+                        </FormControl>
 
                         <TextField
                             label="סיסמה"
@@ -69,25 +88,22 @@ function Login() {
                             required
                         />
 
+                        {isUsersLoading && (
+                            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+                                <CircularProgress size={22} />
+                            </Box>
+                        )}
+
                         <Button
                             type="submit"
                             variant="contained"
                             fullWidth
                             size="large"
                             sx={{ mt: 3, mb: 2 }}
-                            disabled={loading}
+                            disabled={loading || isUsersLoading || !username}
                         >
                             {loading ? 'מתחבר...' : 'התחבר'}
                         </Button>
-
-                        <Box sx={{ textAlign: 'center' }}>
-                            <Typography variant="body2">
-                                אין לך חשבון?{' '}
-                                <Link to="/register" style={{ textDecoration: 'none' }}>
-                                    הרשם
-                                </Link>
-                            </Typography>
-                        </Box>
                     </form>
                 </Paper>
             </Box>

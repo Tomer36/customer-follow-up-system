@@ -29,49 +29,15 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', message: 'Auth service is running' });
 });
 
-// Register
-app.post('/api/register', async (req, res) => {
+// Public login options
+app.get('/api/login-users', async (req, res) => {
     try {
-        const { email, password, full_name } = req.body;
-
-        if (!email || !password || !full_name) {
-            return res.status(400).json({ error: 'All fields are required' });
-        }
-
-        if (password.length < 6) {
-            return res.status(400).json({ error: 'Password must be at least 6 characters' });
-        }
-
-        const [existing] = await pool.execute(
-            'SELECT id FROM users WHERE email = ?',
-            [email]
+        const [users] = await pool.execute(
+            'SELECT id, username FROM users ORDER BY username ASC'
         );
-
-        if (existing.length > 0) {
-            return res.status(409).json({ error: 'Email already exists' });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-
-        const [result] = await pool.execute(
-            'INSERT INTO users (email, password, full_name) VALUES (?, ?, ?)',
-            [email, hashedPassword, full_name]
-        );
-
-        const token = jwt.sign(
-            { id: result.insertId, email },
-            config.jwt.secret,
-            { expiresIn: config.jwt.expiresIn }
-        );
-
-        res.status(201).json({
-            message: 'User registered successfully',
-            token,
-            user: { id: result.insertId, email, full_name }
-        });
-
+        res.json({ users });
     } catch (error) {
-        console.error('Register error:', error);
+        console.error('Get login users error:', error);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -79,30 +45,30 @@ app.post('/api/register', async (req, res) => {
 // Login
 app.post('/api/login', async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { username, password } = req.body;
 
-        if (!email || !password) {
-            return res.status(400).json({ error: 'Email and password are required' });
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password are required' });
         }
 
         const [users] = await pool.execute(
-            'SELECT * FROM users WHERE email = ?',
-            [email]
+            'SELECT * FROM users WHERE username = ? LIMIT 1',
+            [username]
         );
 
         if (users.length === 0) {
-            return res.status(401).json({ error: 'Invalid email or password' });
+            return res.status(401).json({ error: 'Invalid username or password' });
         }
 
         const user = users[0];
         const isValidPassword = await bcrypt.compare(password, user.password);
 
         if (!isValidPassword) {
-            return res.status(401).json({ error: 'Invalid email or password' });
+            return res.status(401).json({ error: 'Invalid username or password' });
         }
 
         const token = jwt.sign(
-            { id: user.id, email: user.email },
+            { id: user.id, username: user.username },
             config.jwt.secret,
             { expiresIn: config.jwt.expiresIn }
         );
@@ -110,7 +76,7 @@ app.post('/api/login', async (req, res) => {
         res.json({
             message: 'Login successful',
             token,
-            user: { id: user.id, email: user.email, full_name: user.full_name }
+            user: { id: user.id, username: user.username }
         });
 
     } catch (error) {
@@ -165,7 +131,7 @@ app.get('/api/me', async (req, res) => {
         const decoded = jwt.verify(token, config.jwt.secret);
 
         const [users] = await pool.execute(
-            'SELECT id, email, full_name, created_at FROM users WHERE id = ?',
+            'SELECT id, username, created_at FROM users WHERE id = ?',
             [decoded.id]
         );
 
@@ -189,7 +155,7 @@ app.get('/api/me', async (req, res) => {
 app.get('/api/users', auth, async (req, res) => {
     try {
         const [users] = await pool.execute(
-            'SELECT id, email, full_name, created_at FROM users ORDER BY created_at DESC'
+            'SELECT id, username, created_at FROM users ORDER BY created_at DESC'
         );
         res.json({ users });
     } catch (error) {
@@ -201,7 +167,7 @@ app.get('/api/users', auth, async (req, res) => {
 app.get('/api/users/:id', auth, async (req, res) => {
     try {
         const [users] = await pool.execute(
-            'SELECT id, email, full_name, created_at FROM users WHERE id = ?',
+            'SELECT id, username, created_at FROM users WHERE id = ?',
             [req.params.id]
         );
         if (users.length === 0) return res.status(404).json({ error: 'User not found' });
@@ -214,18 +180,18 @@ app.get('/api/users/:id', auth, async (req, res) => {
 
 app.put('/api/users/:id', auth, async (req, res) => {
     try {
-        const { email, full_name } = req.body;
-        if (!email || !full_name) {
-            return res.status(400).json({ error: 'email and full_name are required' });
+        const username = String(req.body.username || '').trim();
+        if (!username) {
+            return res.status(400).json({ error: 'username is required' });
         }
 
         await pool.execute(
-            'UPDATE users SET email = ?, full_name = ? WHERE id = ?',
-            [email, full_name, req.params.id]
+            'UPDATE users SET username = ? WHERE id = ?',
+            [username, req.params.id]
         );
 
         const [users] = await pool.execute(
-            'SELECT id, email, full_name, created_at FROM users WHERE id = ?',
+            'SELECT id, username, created_at FROM users WHERE id = ?',
             [req.params.id]
         );
         if (users.length === 0) return res.status(404).json({ error: 'User not found' });
@@ -632,7 +598,7 @@ const upsertReport175Rows = async (rows, userId) => {
             ON DUPLICATE KEY UPDATE
                 name = VALUES(name),
                 company = VALUES(company),
-                created_by = COALESCE(customers.created_by, VALUES(created_by)),
+                created_by = VALUES(created_by),
                 updated_at = CURRENT_TIMESTAMP
         `, values);
 
@@ -680,7 +646,7 @@ const getLatestHandlingByCustomerIds = async (customerIds) => {
             n.due_date as payment_target,
             n.managed_by as managed_by_id,
             n.group_id as group_id,
-            manager.full_name as managed_by_name,
+            manager.username as managed_by_name,
             g.name as group_name
         FROM customer_notes n
         INNER JOIN (
@@ -708,7 +674,7 @@ const getLatestHandlingByUser = async (userId) => {
             n.due_date as payment_target,
             n.managed_by as managed_by_id,
             n.group_id as group_id,
-            manager.full_name as managed_by_name,
+            manager.username as managed_by_name,
             g.name as group_name
         FROM customer_notes n
         INNER JOIN (
@@ -787,6 +753,21 @@ let report176CacheByAccountKey = new Map();
 let report176CacheSyncedAt = null;
 let report184CacheByCustomerId = new Map();
 let report185CacheByCustomerId = new Map();
+let customersSyncState = {
+    report175: { status: 'idle', startedAt: null, finishedAt: null, error: null },
+    background: { status: 'idle', startedAt: null, finishedAt: null, error: null },
+    lastTriggeredAt: null
+};
+
+const setSyncState = (key, patch) => {
+    customersSyncState = {
+        ...customersSyncState,
+        [key]: {
+            ...customersSyncState[key],
+            ...patch
+        }
+    };
+};
 
 const setReport175Cache = (rows) => {
     const safeRows = Array.isArray(rows) ? rows : [];
@@ -820,6 +801,90 @@ const setReport176Cache = (rows) => {
         report176CacheByAccountKey.set(String(row.account_key), row);
     }
     report176CacheSyncedAt = new Date().toISOString();
+};
+
+const getCustomersSyncStatusPayload = () => ({
+    sync: customersSyncState,
+    caches: {
+        report175SyncedAt: report175CacheSyncedAt,
+        report198SyncedAt: report198CacheSyncedAt,
+        report176SyncedAt: report176CacheSyncedAt
+    }
+});
+
+const isCacheFresh = (syncedAt, maxAgeMs) => {
+    if (!syncedAt) return false;
+    const ageMs = Date.now() - new Date(syncedAt).getTime();
+    return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < maxAgeMs;
+};
+
+const runBackgroundSupplementalSync = async () => {
+    if (customersSyncState.background.status === 'running') {
+        return { skipped: true };
+    }
+
+    const freshWindowMs = config.sync.supplementalFreshMs;
+    const shouldSync198 = !isCacheFresh(report198CacheSyncedAt, freshWindowMs);
+    const shouldSync176 = !isCacheFresh(report176CacheSyncedAt, freshWindowMs);
+
+    if (!shouldSync198 && !shouldSync176) {
+        setSyncState('background', {
+            status: 'completed',
+            startedAt: new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+            error: null
+        });
+        return { skipped: true, reason: 'fresh_cache' };
+    }
+
+    setSyncState('background', {
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+        error: null
+    });
+
+    try {
+        const [report198Result, report176Result] = await Promise.allSettled([
+            shouldSync198 ? fetchReport198Payload() : Promise.resolve(null),
+            shouldSync176 ? fetchReport176Payload() : Promise.resolve(null)
+        ]);
+
+        const warnings = [];
+
+        if (!shouldSync198) {
+            // Keep existing 198 cache when it's still fresh.
+        } else if (report198Result.status === 'fulfilled') {
+            const rows198 = extractReportRowsByPredicate(report198Result.value, rowLooksLikeReport198).map(mapReport198Row);
+            setReport198Cache(rows198);
+        } else {
+            warnings.push(`Failed to sync report 198: ${report198Result.reason?.message || 'Unknown error'}`);
+        }
+
+        if (!shouldSync176) {
+            // Keep existing 176 cache when it's still fresh.
+        } else if (report176Result.status === 'fulfilled') {
+            const rows176 = extractReportRowsByPredicate(report176Result.value, rowLooksLikeReport176).map(mapReport176Row);
+            setReport176Cache(rows176);
+        } else {
+            warnings.push(`Failed to sync report 176: ${report176Result.reason?.message || 'Unknown error'}`);
+        }
+
+        setSyncState('background', {
+            status: warnings.length ? 'completed_with_warnings' : 'completed',
+            finishedAt: new Date().toISOString(),
+            error: warnings.length ? warnings.join(' | ') : null
+        });
+
+        return { warnings };
+    } catch (error) {
+        setSyncState('background', {
+            status: 'failed',
+            finishedAt: new Date().toISOString(),
+            error: error?.message || 'Unknown error'
+        });
+        throw error;
+    }
 };
 
 const getEnrichmentForWorkRow = (workRow) => {
@@ -1034,9 +1099,36 @@ app.get('/api/customers/reports/175', auth, async (req, res) => {
     }
 });
 
+app.get('/api/customers/sync/status', auth, async (req, res) => {
+    try {
+        res.json(getCustomersSyncStatusPayload());
+    } catch (error) {
+        console.error('Get customers sync status error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
 // Sync customers (report 175 direct call)
 app.post('/api/customers/sync', auth, async (req, res) => {
     try {
+        if (customersSyncState.report175.status === 'running') {
+            return res.status(202).json({
+                message: 'Sync already in progress.',
+                ...getCustomersSyncStatusPayload()
+            });
+        }
+
+        setSyncState('report175', {
+            status: 'running',
+            startedAt: new Date().toISOString(),
+            finishedAt: null,
+            error: null
+        });
+        customersSyncState = {
+            ...customersSyncState,
+            lastTriggeredAt: new Date().toISOString()
+        };
+
         const payload175 = await fetchReport175Payload();
         const rows175 = extractReport175Rows(payload175)
             .filter((row) => row && typeof row === 'object')
@@ -1045,36 +1137,29 @@ app.post('/api/customers/sync', auth, async (req, res) => {
         const result175 = await upsertReport175Rows(rows175, req.userId);
         setReport175Cache(rows175);
 
-        let rows198 = [];
-        let rows176 = [];
-        const warnings = [];
+        setSyncState('report175', {
+            status: 'completed',
+            finishedAt: new Date().toISOString(),
+            error: null
+        });
 
-        try {
-            const payload198 = await fetchReport198Payload();
-            rows198 = extractReportRowsByPredicate(payload198, rowLooksLikeReport198).map(mapReport198Row);
-            setReport198Cache(rows198);
-        } catch (err) {
-            warnings.push(`Failed to sync report 198: ${err?.message || 'Unknown error'}`);
-        }
+        runBackgroundSupplementalSync().catch((backgroundError) => {
+            console.error('Background supplemental sync error:', backgroundError);
+        });
 
-        try {
-            const payload176 = await fetchReport176Payload();
-            rows176 = extractReportRowsByPredicate(payload176, rowLooksLikeReport176).map(mapReport176Row);
-            setReport176Cache(rows176);
-        } catch (err) {
-            warnings.push(`Failed to sync report 176: ${err?.message || 'Unknown error'}`);
-        }
-
-        return res.json({
-            message: warnings.length ? 'Sync completed with warnings.' : 'Sync completed successfully.',
+        return res.status(202).json({
+            message: 'Fast sync completed. Supplemental reports are syncing in the background.',
             synced: {
-                report175: { received: rows175.length, upserted: result175.synced, syncedAt: report175CacheSyncedAt },
-                report198: { received: rows198.length, syncedAt: report198CacheSyncedAt },
-                report176: { received: rows176.length, syncedAt: report176CacheSyncedAt }
+                report175: { received: rows175.length, upserted: result175.synced, syncedAt: report175CacheSyncedAt }
             },
-            warnings
+            ...getCustomersSyncStatusPayload()
         });
     } catch (error) {
+        setSyncState('report175', {
+            status: 'failed',
+            finishedAt: new Date().toISOString(),
+            error: error?.message || 'Unknown error'
+        });
         console.error('Sync customers error:', error);
         res.status(error.status || 500).json({ error: error.message || 'Server error' });
     }
@@ -1115,7 +1200,7 @@ app.get('/api/customers/:id', auth, async (req, res) => {
             SELECT
                 n.created_at as payment_start,
                 n.due_date as payment_target,
-                manager.full_name as managed_by_name,
+                manager.username as managed_by_name,
                 g.name as group_name
             FROM customer_notes n
             LEFT JOIN users manager ON manager.id = n.managed_by
@@ -1289,9 +1374,9 @@ app.get('/api/customers/:id/notes', auth, async (req, res) => {
                 n.action_type,
                 n.created_at,
                 creator.id as created_by_id,
-                creator.full_name as created_by_name,
+                creator.username as created_by_name,
                 manager.id as managed_by_id,
-                manager.full_name as manager_name,
+                manager.username as manager_name,
                 g.id as group_id,
                 g.name as group_name
             FROM customer_notes n
@@ -1359,9 +1444,9 @@ app.post('/api/customers/:id/notes', auth, async (req, res) => {
                 n.action_type,
                 n.created_at,
                 creator.id as created_by_id,
-                creator.full_name as created_by_name,
+                creator.username as created_by_name,
                 manager.id as managed_by_id,
-                manager.full_name as manager_name,
+                manager.username as manager_name,
                 g.id as group_id,
                 g.name as group_name
             FROM customer_notes n
@@ -1391,9 +1476,9 @@ app.get('/api/customers/:id/transfers', auth, async (req, res) => {
                 n.due_date,
                 n.created_at,
                 creator.id as created_by_id,
-                creator.full_name as created_by_name,
+                creator.username as created_by_name,
                 manager.id as managed_by_id,
-                manager.full_name as manager_name,
+                manager.username as manager_name,
                 g.id as group_id,
                 g.name as group_name
             FROM customer_notes n
@@ -1441,9 +1526,9 @@ app.post('/api/customers/:id/transfers', auth, async (req, res) => {
                 n.due_date,
                 n.created_at,
                 creator.id as created_by_id,
-                creator.full_name as created_by_name,
+                creator.username as created_by_name,
                 manager.id as managed_by_id,
-                manager.full_name as manager_name,
+                manager.username as manager_name,
                 g.id as group_id,
                 g.name as group_name
             FROM customer_notes n
@@ -1508,159 +1593,6 @@ app.delete('/api/customers/:id', auth, async (req, res) => {
         res.json({ message: 'Customer deleted' });
     } catch (error) {
         console.error('Delete customer error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// ===== TASK ROUTES =====
-
-// Get daily tasks
-app.get('/api/tasks/daily', auth, async (req, res) => {
-    try {
-        const [tasks] = await pool.execute(`
-            SELECT t.*, c.name as customer_name, g.name as group_name
-            FROM tasks t
-            LEFT JOIN customers c ON t.customer_id = c.id
-            LEFT JOIN \`groups\` g ON t.group_id = g.id
-            WHERE t.due_date = CURDATE() AND t.status = 'open'
-            ORDER BY FIELD(t.priority, 'urgent', 'high', 'medium', 'low')
-        `);
-        res.json({ tasks });
-    } catch (error) {
-        console.error('Get daily tasks error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// Get overdue tasks
-app.get('/api/tasks/overdue', auth, async (req, res) => {
-    try {
-        const [tasks] = await pool.execute(`
-            SELECT t.*, c.name as customer_name, g.name as group_name,
-                   DATEDIFF(CURDATE(), t.due_date) as days_overdue
-            FROM tasks t
-            LEFT JOIN customers c ON t.customer_id = c.id
-            LEFT JOIN \`groups\` g ON t.group_id = g.id
-            WHERE t.due_date < CURDATE() AND t.status = 'open'
-            ORDER BY t.due_date ASC
-        `);
-        res.json({ tasks });
-    } catch (error) {
-        console.error('Get overdue tasks error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// Get all tasks (filtered)
-app.get('/api/tasks', auth, async (req, res) => {
-    try {
-        const { status, customer_id, group_id } = req.query;
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 20;
-        const offset = (page - 1) * limit;
-
-        let query = `
-            SELECT t.*, c.name as customer_name, g.name as group_name
-            FROM tasks t
-            LEFT JOIN customers c ON t.customer_id = c.id
-            LEFT JOIN \`groups\` g ON t.group_id = g.id
-            WHERE 1=1
-        `;
-        const params = [];
-
-        if (status) { query += ' AND t.status = ?'; params.push(status); }
-        if (customer_id) { query += ' AND t.customer_id = ?'; params.push(customer_id); }
-        if (group_id) { query += ' AND t.group_id = ?'; params.push(group_id); }
-
-        query += ' ORDER BY t.due_date ASC, FIELD(t.priority, \'urgent\', \'high\', \'medium\', \'low\') LIMIT ? OFFSET ?';
-
-        const [tasks] = await pool.execute(query, [...params, limit, offset]);
-        res.json({ tasks });
-    } catch (error) {
-        console.error('Get tasks error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// Get task by ID
-app.get('/api/tasks/:id', auth, async (req, res) => {
-    try {
-        const [tasks] = await pool.execute(`
-            SELECT t.*, c.name as customer_name, g.name as group_name
-            FROM tasks t
-            LEFT JOIN customers c ON t.customer_id = c.id
-            LEFT JOIN \`groups\` g ON t.group_id = g.id
-            WHERE t.id = ?
-        `, [req.params.id]);
-
-        if (tasks.length === 0) return res.status(404).json({ error: 'Task not found' });
-        res.json({ task: tasks[0] });
-    } catch (error) {
-        console.error('Get task error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// Create task
-app.post('/api/tasks', auth, async (req, res) => {
-    try {
-        const { customer_id, group_id, title, description, priority, due_date } = req.body;
-        if (!customer_id || !title || !due_date) {
-            return res.status(400).json({ error: 'customer_id, title, and due_date are required' });
-        }
-
-        const [result] = await pool.execute(
-            'INSERT INTO tasks (customer_id, group_id, title, description, priority, due_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [customer_id, group_id || null, title, description || null, priority || 'medium', due_date, req.userId]
-        );
-
-        const [task] = await pool.execute('SELECT * FROM tasks WHERE id = ?', [result.insertId]);
-        res.status(201).json({ message: 'Task created', task: task[0] });
-    } catch (error) {
-        console.error('Create task error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// Update task status
-app.patch('/api/tasks/:id/status', auth, async (req, res) => {
-    try {
-        const { status } = req.body;
-        if (!['open', 'done', 'postponed'].includes(status)) {
-            return res.status(400).json({ error: 'Status must be open, done, or postponed' });
-        }
-        await pool.execute('UPDATE tasks SET status = ? WHERE id = ?', [status, req.params.id]);
-        const [task] = await pool.execute('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
-        res.json({ message: 'Status updated', task: task[0] });
-    } catch (error) {
-        console.error('Update task status error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// Update task
-app.put('/api/tasks/:id', auth, async (req, res) => {
-    try {
-        const { title, description, priority, due_date, group_id } = req.body;
-        await pool.execute(
-            'UPDATE tasks SET title = ?, description = ?, priority = ?, due_date = ?, group_id = ? WHERE id = ?',
-            [title, description || null, priority || 'medium', due_date, group_id || null, req.params.id]
-        );
-        const [task] = await pool.execute('SELECT * FROM tasks WHERE id = ?', [req.params.id]);
-        res.json({ message: 'Task updated', task: task[0] });
-    } catch (error) {
-        console.error('Update task error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
-
-// Delete task
-app.delete('/api/tasks/:id', auth, async (req, res) => {
-    try {
-        await pool.execute('DELETE FROM tasks WHERE id = ?', [req.params.id]);
-        res.json({ message: 'Task deleted' });
-    } catch (error) {
-        console.error('Delete task error:', error);
         res.status(500).json({ error: 'Server error' });
     }
 });
@@ -1743,29 +1675,26 @@ app.get('/api/groups/:id/customers', auth, async (req, res) => {
     }
 });
 
-// ===== DASHBOARD =====
+const startCustomersBackgroundSync = () => {
+    if (!config.sync.autoStart) return;
 
-app.get('/api/dashboard/stats', auth, async (req, res) => {
-    try {
-        const [[{ total_customers }]] = await pool.execute('SELECT COUNT(*) as total_customers FROM customers');
-        const [[{ active_tasks }]] = await pool.execute("SELECT COUNT(*) as active_tasks FROM tasks WHERE status = 'open'");
-        const [[{ daily_tasks }]] = await pool.execute("SELECT COUNT(*) as daily_tasks FROM tasks WHERE due_date = CURDATE() AND status = 'open'");
-        const [[{ overdue_tasks }]] = await pool.execute("SELECT COUNT(*) as overdue_tasks FROM tasks WHERE due_date < CURDATE() AND status = 'open'");
-        const [[{ total_groups }]] = await pool.execute('SELECT COUNT(*) as total_groups FROM `groups`');
+    runBackgroundSupplementalSync().catch((error) => {
+        console.error('Initial background supplemental sync error:', error);
+    });
 
-        res.json({
-            stats: { total_customers, active_tasks, daily_tasks, overdue_tasks, total_groups }
+    setInterval(() => {
+        runBackgroundSupplementalSync().catch((error) => {
+            console.error('Scheduled background supplemental sync error:', error);
         });
-    } catch (error) {
-        console.error('Dashboard error:', error);
-        res.status(500).json({ error: 'Server error' });
-    }
-});
+    }, config.sync.backgroundIntervalMs);
+};
 
 // Start
 app.listen(config.port, () => {
     console.log(`\n✅ Auth service running on http://localhost:${config.port}`);
     console.log(`   Health: http://localhost:${config.port}/health\n`);
 });
+
+startCustomersBackgroundSync();
 
 

@@ -21,18 +21,14 @@ api.interceptors.request.use((config) => {
 
 // Auth API
 export const authAPI = {
-    register: async (email, password, fullName) => {
-        const response = await api.post('/register', {
-            email,
-            password,
-            full_name: fullName
-        });
+    getLoginUsers: async () => {
+        const response = await api.get('/login-users');
         return response.data;
     },
 
-    login: async (email, password) => {
+    login: async (username, password) => {
         const response = await api.post('/login', {
-            email,
+            username,
             password
         });
         return response.data;
@@ -85,32 +81,14 @@ export const customersAPI = {
         api.post(`/customers/${id}/groups`, { group_id: groupId }).then(r => r.data),
     sync: () =>
         api.post('/customers/sync').then(r => r.data),
+    getSyncStatus: () =>
+        api.get('/customers/sync/status').then(r => r.data),
     create: (data) =>
         api.post('/customers', data).then(r => r.data),
     update: (id, data) =>
         api.put(`/customers/${id}`, data).then(r => r.data),
     delete: (id) =>
         api.delete(`/customers/${id}`).then(r => r.data),
-};
-
-// Tasks API
-export const tasksAPI = {
-    getAll: (filters = {}) =>
-        api.get('/tasks', { params: filters }).then(r => r.data),
-    getById: (id) =>
-        api.get(`/tasks/${id}`).then(r => r.data),
-    getDaily: () =>
-        api.get('/tasks/daily').then(r => r.data),
-    getOverdue: () =>
-        api.get('/tasks/overdue').then(r => r.data),
-    create: (data) =>
-        api.post('/tasks', data).then(r => r.data),
-    updateStatus: (id, status) =>
-        api.patch(`/tasks/${id}/status`, { status }).then(r => r.data),
-    update: (id, data) =>
-        api.put(`/tasks/${id}`, data).then(r => r.data),
-    delete: (id) =>
-        api.delete(`/tasks/${id}`).then(r => r.data),
 };
 
 // Groups API
@@ -125,12 +103,6 @@ export const groupsAPI = {
         api.get(`/groups/${id}/customers`).then(r => r.data),
     addCustomers: (id, customerIds) =>
         api.post(`/groups/${id}/customers`, { customer_ids: customerIds }).then(r => r.data),
-};
-
-// Dashboard API
-export const dashboardAPI = {
-    getStats: () =>
-        api.get('/dashboard/stats').then(r => r.data),
 };
 
 export default api;

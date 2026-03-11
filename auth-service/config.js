@@ -26,7 +26,13 @@ const config = {
         report185Url: process.env.EXTERNAL_REPORT_185_API_URL || 'http://localhost:5000/hashAPI/route-hashAPI/185',
         token: process.env.EXTERNAL_CUSTOMERS_API_TOKEN || '',
         timeoutMs: parseInt(process.env.EXTERNAL_CUSTOMERS_API_TIMEOUT_MS || '30000'),
-        report198TimeoutMs: parseInt(process.env.EXTERNAL_REPORT_198_TIMEOUT_MS || process.env.EXTERNAL_CUSTOMERS_API_TIMEOUT_MS || '120000')
+        report198TimeoutMs: parseInt(process.env.EXTERNAL_REPORT_198_TIMEOUT_MS || process.env.EXTERNAL_CUSTOMERS_API_TIMEOUT_MS || '45000')
+    },
+
+    sync: {
+        backgroundIntervalMs: parseInt(process.env.CUSTOMERS_BACKGROUND_SYNC_INTERVAL_MS || '1800000'),
+        autoStart: String(process.env.CUSTOMERS_BACKGROUND_SYNC_AUTOSTART || 'true').toLowerCase() !== 'false',
+        supplementalFreshMs: parseInt(process.env.CUSTOMERS_SUPPLEMENTAL_FRESH_MS || '1800000')
     }
 };
 

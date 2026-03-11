@@ -10,7 +10,6 @@ function CustomerDetail() {
             <Box sx={{ mt: 4 }}>
                 <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
                     <Button component={Link} to="/customers" variant="outlined">חזרה</Button>
-                    <Button component={Link} to="/dashboard" variant="outlined">לוח בקרה</Button>
                 </Stack>
 
                 <Paper sx={{ p: 3 }}>

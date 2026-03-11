@@ -585,7 +585,7 @@ function CustomerDetailsPanel({ customerId, onClose }) {
                             >
                                 {users.map((u) => (
                                     <MenuItem key={u.id} value={u.id}>
-                                        {u.full_name}
+                                        {u.username}
                                     </MenuItem>
                                 ))}
                             </TextField>

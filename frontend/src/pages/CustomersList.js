@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
     Alert,
     Box,
@@ -27,9 +27,11 @@ import {
 } from '@mui/material';
 import { customersAPI, groupsAPI, usersAPI } from '../services/api';
 import CustomerDetailsPanel from '../components/CustomerDetailsPanel';
+import { useAuth } from '../context/AuthContext';
 
 const formatDate = (value) => (value ? new Date(value).toLocaleDateString('he-IL') : '-');
 const formatNumber = (value) => Number(value || 0).toFixed(2);
+const formatDateTime = (value) => (value ? new Date(value).toLocaleString('he-IL') : 'לא סונכרן');
 
 const pageShellSx = {
     minHeight: '100vh',
@@ -50,6 +52,13 @@ const fieldSx = {
         borderRadius: 3,
         backgroundColor: '#fff'
     }
+};
+
+const statusMetaSx = {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 0.5,
+    alignItems: 'baseline'
 };
 
 const sortableColumns = {
@@ -84,7 +93,9 @@ const sortableColumns = {
 };
 
 function CustomersList() {
+    const navigate = useNavigate();
     const queryClient = useQueryClient();
+    const { logout } = useAuth();
     const [page, setPage] = useState(1);
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
@@ -97,7 +108,8 @@ function CustomersList() {
 
     const { data, isLoading, isError, error } = useQuery({
         queryKey: ['customers', page, search, managedBy, groupId, balanceMode],
-        queryFn: () => customersAPI.getReport175(page, search, 20, { managedBy, groupId, balanceMode })
+        queryFn: () => customersAPI.getReport175(page, search, 20, { managedBy, groupId, balanceMode }),
+        placeholderData: (previousData) => previousData
     });
 
     const { data: usersData } = useQuery({
@@ -110,10 +122,16 @@ function CustomersList() {
         queryFn: () => groupsAPI.getAll()
     });
 
+    const { data: syncStatusData } = useQuery({
+        queryKey: ['customers-sync-status'],
+        queryFn: () => customersAPI.getSyncStatus()
+    });
+
     const syncMutation = useMutation({
         mutationFn: customersAPI.sync,
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['customers'] });
+            queryClient.invalidateQueries({ queryKey: ['customers-sync-status'] });
         }
     });
 
@@ -138,6 +156,11 @@ function CustomersList() {
     const pagination = data?.pagination;
     const users = usersData?.users || [];
     const groups = groupsData?.groups || [];
+    const syncStatus = syncStatusData?.sync;
+    const syncCaches = syncStatusData?.caches;
+    const isFastSyncRunning = syncStatus?.report175?.status === 'running';
+    const isBackgroundSyncRunning = syncStatus?.background?.status === 'running';
+    const isAnySyncRunning = isFastSyncRunning || isBackgroundSyncRunning || syncMutation.isPending;
 
     const handleSearchSubmit = (event) => {
         event.preventDefault();
@@ -163,6 +186,11 @@ function CustomersList() {
 
         setSortBy(columnKey);
         setSortDirection('asc');
+    };
+
+    const handleLogout = () => {
+        logout();
+        navigate('/login');
     };
 
     return (
@@ -209,23 +237,50 @@ function CustomersList() {
                             >
                                 לקוחות
                             </Typography>
+                            <Stack spacing={0.5} sx={{ mt: 1 }}>
+                                <Box sx={statusMetaSx}>
+                                    <Typography variant="body2" color="text.secondary">
+                                        עדכון רשימת לקוחות:
+                                    </Typography>
+                                    <Typography variant="body2" color="text.secondary" sx={{ direction: 'ltr' }}>
+                                        {formatDateTime(syncCaches?.report175SyncedAt)}
+                                    </Typography>
+                                </Box>
+                                <Box sx={statusMetaSx}>
+                                    <Typography variant="body2" color="text.secondary">
+                                        עדכון פרטי לקוחות:
+                                    </Typography>
+                                    <Typography variant="body2" color="text.secondary" sx={{ direction: 'ltr' }}>
+                                        {formatDateTime(syncCaches?.report198SyncedAt || syncCaches?.report176SyncedAt)}
+                                    </Typography>
+                                </Box>
+                            </Stack>
                         </Box>
 
                         <Stack direction="row" spacing={1}>
-                            <Button component={Link} to="/dashboard" variant="outlined" sx={{ borderRadius: 999 }}>
-                                לוח בקרה
+                            <Button
+                                onClick={handleLogout}
+                                variant="outlined"
+                                color="error"
+                                sx={{ borderRadius: 999, px: 2 }}
+                            >
+                                התנתק
                             </Button>
                             <Button
                                 onClick={() => syncMutation.mutate()}
                                 variant="contained"
-                                disabled={syncMutation.isPending}
+                                disabled={isAnySyncRunning}
                                 sx={{
                                     borderRadius: 999,
                                     px: 2.5,
                                     boxShadow: '0 12px 30px rgba(25, 118, 210, 0.28)'
                                 }}
                             >
-                                {syncMutation.isPending ? 'מסנכרן...' : 'סנכרן'}
+                                {isFastSyncRunning || syncMutation.isPending
+                                    ? 'מסנכרן 175...'
+                                    : isBackgroundSyncRunning
+                                        ? 'משלים ברקע...'
+                                        : 'סנכרן'}
                             </Button>
                         </Stack>
                     </Stack>
@@ -269,7 +324,7 @@ function CustomersList() {
                                 >
                                     <MenuItem value="">הכל</MenuItem>
                                     {users.map((u) => (
-                                        <MenuItem key={u.id} value={u.id}>{u.full_name}</MenuItem>
+                                        <MenuItem key={u.id} value={u.id}>{u.username}</MenuItem>
                                     ))}
                                 </Select>
                             </FormControl>
@@ -310,6 +365,12 @@ function CustomersList() {
                 {syncMutation.isSuccess && (
                     <Alert severity="success" sx={{ mb: 2 }}>
                         {syncMutation.data?.message || 'הסנכרון הושלם'}
+                    </Alert>
+                )}
+
+                {isBackgroundSyncRunning && (
+                    <Alert severity="info" sx={{ mb: 2 }}>
+                        דוחות 198 ו-176 ממשיכים להסתנכרן ברקע. אפשר להמשיך לעבוד בזמן הזה.
                     </Alert>
                 )}
 
