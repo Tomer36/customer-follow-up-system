@@ -100,12 +100,7 @@ const auth = async (req, res, next) => {
 };
 
 const getCustomerAccessCondition = () => `
-    (c.created_by = ? OR EXISTS (
-        SELECT 1
-        FROM customer_notes cn
-        WHERE cn.customer_id = c.id
-          AND cn.managed_by = ?
-    ))
+    (? IS NOT NULL OR ? IS NOT NULL)
 `;
 
 const canAccessCustomer = async (customerId, userId) => {
@@ -580,25 +575,54 @@ const upsertReport175Rows = async (rows, userId) => {
 
     for (let i = 0; i < rows.length; i += chunkSize) {
         const chunk = rows.slice(i, i + chunkSize);
-        const placeholders = chunk.map(() => '(?, ?, ?, ?)').join(', ');
+        const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)').join(', ');
         const values = [];
 
         for (const row of chunk) {
             values.push(
                 row.external_id,
                 row.account_name || row.account_key || row.external_id,
+                null,
+                null,
                 row.account_key || null,
-                userId
+                row.account_balance || 0,
+                row.credit_limit || 0,
+                row.raw_payload || null,
+                null,
+                null,
+                null,
+                null
             );
         }
 
         await pool.execute(`
-            INSERT INTO customers (external_id, name, company, created_by)
+            INSERT INTO customers (
+                external_id,
+                name,
+                email,
+                phone,
+                company,
+                balance,
+                credit_limit,
+                raw_payload,
+                created_by,
+                assigned_user_id,
+                group_id,
+                status,
+                last_synced_at
+            )
             VALUES ${placeholders}
             ON DUPLICATE KEY UPDATE
                 name = VALUES(name),
+                email = VALUES(email),
+                phone = VALUES(phone),
                 company = VALUES(company),
-                created_by = VALUES(created_by),
+                balance = VALUES(balance),
+                credit_limit = VALUES(credit_limit),
+                raw_payload = VALUES(raw_payload),
+                last_synced_at = CURRENT_TIMESTAMP,
+                created_by = IFNULL(created_by, VALUES(created_by)),
+                assigned_user_id = IFNULL(assigned_user_id, VALUES(assigned_user_id)),
                 updated_at = CURRENT_TIMESTAMP
         `, values);
 
@@ -620,7 +644,9 @@ const getCustomerIdsByExternalIds = async (externalIds, userId) => {
         const chunk = uniqueIds.slice(i, i + chunkSize);
         const placeholders = chunk.map(() => '?').join(', ');
         const [rows] = await pool.execute(`
-            SELECT c.id, c.external_id
+            SELECT
+                c.id,
+                c.external_id
             FROM customers c
             WHERE c.external_id IN (${placeholders})
               AND ${getCustomerAccessCondition()}
@@ -641,23 +667,28 @@ const getLatestHandlingByCustomerIds = async (customerIds) => {
     const placeholders = uniqueIds.map(() => '?').join(', ');
     const [rows] = await pool.execute(`
         SELECT
-            n.customer_id,
-            n.created_at as payment_start,
-            n.due_date as payment_target,
-            n.managed_by as managed_by_id,
-            n.group_id as group_id,
+            c.id as customer_id,
+            latest_note.created_at as payment_start,
+            latest_note.due_date as payment_target,
+            c.assigned_user_id as managed_by_id,
+            c.group_id as group_id,
             manager.username as managed_by_name,
             g.name as group_name
-        FROM customer_notes n
-        INNER JOIN (
-            SELECT customer_id, MAX(id) as latest_id
-            FROM customer_notes
-            WHERE customer_id IN (${placeholders})
-            GROUP BY customer_id
-        ) latest ON latest.latest_id = n.id
-        LEFT JOIN users manager ON manager.id = n.managed_by
-        LEFT JOIN \`groups\` g ON g.id = n.group_id
-    `, uniqueIds);
+        FROM customers c
+        LEFT JOIN (
+            SELECT n.customer_id, n.created_at, n.due_date, n.id
+            FROM customer_notes n
+            INNER JOIN (
+                SELECT customer_id, MAX(id) as latest_id
+                FROM customer_notes
+                WHERE customer_id IN (${placeholders})
+                GROUP BY customer_id
+            ) latest ON latest.latest_id = n.id
+        ) latest_note ON latest_note.customer_id = c.id
+        LEFT JOIN users manager ON manager.id = c.assigned_user_id
+        LEFT JOIN \`groups\` g ON g.id = c.group_id
+        WHERE c.id IN (${placeholders})
+    `, [...uniqueIds, ...uniqueIds]);
 
     const map = new Map();
     for (const row of rows) {
@@ -669,22 +700,19 @@ const getLatestHandlingByCustomerIds = async (customerIds) => {
 const getLatestHandlingByUser = async (userId) => {
     const [rows] = await pool.execute(`
         SELECT
-            n.customer_id,
-            n.created_at as payment_start,
-            n.due_date as payment_target,
-            n.managed_by as managed_by_id,
-            n.group_id as group_id,
+            c.id as customer_id,
+            latest_note.created_at as payment_start,
+            latest_note.due_date as payment_target,
+            c.assigned_user_id as managed_by_id,
+            c.group_id as group_id,
             manager.username as managed_by_name,
             g.name as group_name
-        FROM customer_notes n
-        INNER JOIN (
-            SELECT customer_id, MAX(id) as latest_id
-            FROM customer_notes
-            GROUP BY customer_id
-        ) latest ON latest.latest_id = n.id
-        INNER JOIN customers c ON c.id = n.customer_id
-        LEFT JOIN users manager ON manager.id = n.managed_by
-        LEFT JOIN \`groups\` g ON g.id = n.group_id
+        FROM customers c
+        LEFT JOIN customer_notes latest_note ON latest_note.id = (
+            SELECT MAX(n.id) FROM customer_notes n WHERE n.customer_id = c.id
+        )
+        LEFT JOIN users manager ON manager.id = c.assigned_user_id
+        LEFT JOIN \`groups\` g ON g.id = c.group_id
         WHERE ${getCustomerAccessCondition()}
     `, [userId, userId]);
 
@@ -709,34 +737,18 @@ const getEligibleCustomerIdsByFilters = async (userId, managedBy, groupId) => {
     let query = `
         SELECT c.id
         FROM customers c
-        LEFT JOIN (
-            SELECT n.customer_id, n.managed_by, n.group_id
-            FROM customer_notes n
-            INNER JOIN (
-                SELECT customer_id, MAX(id) as latest_id
-                FROM customer_notes
-                GROUP BY customer_id
-            ) latest ON latest.latest_id = n.id
-        ) ln ON ln.customer_id = c.id
         WHERE ${getCustomerAccessCondition()}
     `;
     const params = [userId, userId];
 
     if (hasManagerFilter) {
-        query += ' AND ln.managed_by = ?';
+        query += ' AND c.assigned_user_id = ?';
         params.push(managedBy);
     }
 
     if (hasGroupFilter) {
-        query += ` AND (
-            EXISTS (
-                SELECT 1
-                FROM customer_groups cg
-                WHERE cg.customer_id = c.id AND cg.group_id = ?
-            )
-            OR ln.group_id = ?
-        )`;
-        params.push(groupId, groupId);
+        query += ' AND c.group_id = ?';
+        params.push(groupId);
     }
 
     const [rows] = await pool.execute(query, params);
@@ -1129,29 +1141,41 @@ app.post('/api/customers/sync', auth, async (req, res) => {
             lastTriggeredAt: new Date().toISOString()
         };
 
-        const payload175 = await fetchReport175Payload();
-        const rows175 = extractReport175Rows(payload175)
-            .filter((row) => row && typeof row === 'object')
-            .map(mapReport175Row);
+        const triggerUserId = req.userId;
 
-        const result175 = await upsertReport175Rows(rows175, req.userId);
-        setReport175Cache(rows175);
+        void (async () => {
+            try {
+                const payload175 = await fetchReport175Payload();
+                const rows175 = extractReport175Rows(payload175)
+                    .filter((row) => row && typeof row === 'object')
+                    .map(mapReport175Row);
 
-        setSyncState('report175', {
-            status: 'completed',
-            finishedAt: new Date().toISOString(),
-            error: null
-        });
+                const result175 = await upsertReport175Rows(rows175, triggerUserId);
+                setReport175Cache(rows175);
 
-        runBackgroundSupplementalSync().catch((backgroundError) => {
-            console.error('Background supplemental sync error:', backgroundError);
-        });
+                setSyncState('report175', {
+                    status: 'completed',
+                    finishedAt: new Date().toISOString(),
+                    error: null
+                });
+
+                runBackgroundSupplementalSync().catch((backgroundError) => {
+                    console.error('Background supplemental sync error:', backgroundError);
+                });
+
+                console.log(`Sync completed: report175 received=${rows175.length}, upserted=${result175.synced}`);
+            } catch (error) {
+                setSyncState('report175', {
+                    status: 'failed',
+                    finishedAt: new Date().toISOString(),
+                    error: error?.message || 'Unknown error'
+                });
+                console.error('Sync customers error:', error);
+            }
+        })();
 
         return res.status(202).json({
-            message: 'Fast sync completed. Supplemental reports are syncing in the background.',
-            synced: {
-                report175: { received: rows175.length, upserted: result175.synced, syncedAt: report175CacheSyncedAt }
-            },
+            message: 'Sync started.',
             ...getCustomersSyncStatusPayload()
         });
     } catch (error) {
@@ -1179,11 +1203,6 @@ app.get('/api/customers/:id', auth, async (req, res) => {
         const customer = rows[0];
         let report175 = report175CacheByExternalId.get(String(customer.external_id)) || null;
         if (!report175) {
-            const payload184 = await fetchReport184Payload(customer);
-            const rows184 = extractReport175Rows(payload184);
-            report175 = pickReportRowForCustomer(rows184, customer);
-        }
-        if (!report175) {
             report175 = {
                 external_id: customer.external_id || null,
                 account_key: customer.company || null,
@@ -1202,11 +1221,13 @@ app.get('/api/customers/:id', auth, async (req, res) => {
                 n.due_date as payment_target,
                 manager.username as managed_by_name,
                 g.name as group_name
-            FROM customer_notes n
-            LEFT JOIN users manager ON manager.id = n.managed_by
-            LEFT JOIN \`groups\` g ON g.id = n.group_id
-            WHERE n.customer_id = ?
-            ORDER BY n.id DESC
+            FROM customers c
+            LEFT JOIN customer_notes n ON n.id = (
+                SELECT MAX(n2.id) FROM customer_notes n2 WHERE n2.customer_id = c.id
+            )
+            LEFT JOIN users manager ON manager.id = c.assigned_user_id
+            LEFT JOIN \`groups\` g ON g.id = c.group_id
+            WHERE c.id = ?
             LIMIT 1
         `, [req.params.id]);
 
@@ -1246,22 +1267,26 @@ app.get('/api/customers/:id/basic-reports', auth, async (req, res) => {
         if (rows.length === 0) return res.status(404).json({ error: 'Customer not found' });
 
         const customer = rows[0];
-        const customerId = Number(customer.id);
+        const report175 = report175CacheByExternalId.get(String(customer.external_id)) || {
+            external_id: customer.external_id || null,
+            account_key: customer.company || null,
+            account_name: customer.name || null,
+            account_balance: Number(customer.balance || 0),
+            credit_limit: Number(customer.credit_limit || 0)
+        };
+        const enriched = getEnrichmentForWorkRow(report175);
 
-        let payload184 = report184CacheByCustomerId.get(customerId) || null;
-        if (!payload184) {
-            payload184 = await fetchReport184Payload(customer);
-            if (payload184) report184CacheByCustomerId.set(customerId, payload184);
-        }
-
-        let payload185 = report185CacheByCustomerId.get(customerId) || null;
-        if (!payload185) {
-            payload185 = await fetchReport185Payload(customer);
-            if (payload185) report185CacheByCustomerId.set(customerId, payload185);
-        }
-
-        const rows184 = extractObjectRows(payload184);
-        const rows185 = extractObjectRows(payload185);
+        const localBasicRow = {
+            'מפתח חשבון': report175.account_key || customer.company || null,
+            'שם חשבון': report175.account_name || customer.name || null,
+            'מספר כרטיס חשבון': report175.external_id || customer.external_id || null,
+            'שם איש קשר': enriched.contact_name || null,
+            'דוא"ל': enriched.email || customer.email || null,
+            'טלפון': enriched.phone || customer.phone || null,
+            'טלפון נייד': enriched.mobile_phone || null,
+            'יתרת חשבון': report175.account_balance ?? Number(customer.balance || 0),
+            'תקרת אשראי': report175.credit_limit ?? Number(customer.credit_limit || 0)
+        };
 
         res.json({
             customer: {
@@ -1271,12 +1296,12 @@ app.get('/api/customers/:id/basic-reports', auth, async (req, res) => {
                 name: customer.name || null
             },
             report184: {
-                row: pickRawReportRowForCustomer(rows184, customer),
-                rowsCount: rows184.length
+                row: localBasicRow,
+                rowsCount: Object.values(localBasicRow).filter((value) => value !== null && value !== '').length
             },
             report185: {
-                row: pickRawReportRowForCustomer(rows185, customer),
-                rowsCount: rows185.length
+                row: null,
+                rowsCount: 0
             }
         });
     } catch (error) {
@@ -1327,9 +1352,10 @@ app.get('/api/customers/:id/groups', auth, async (req, res) => {
         if (!hasAccess) return res.status(404).json({ error: 'Customer not found' });
 
         const [groups] = await pool.execute(`
-            SELECT g.* FROM \`groups\` g
-            INNER JOIN customer_groups cg ON cg.group_id = g.id
-            WHERE cg.customer_id = ?
+            SELECT g.*
+            FROM customers c
+            INNER JOIN \`groups\` g ON g.id = c.group_id
+            WHERE c.id = ?
             ORDER BY g.name ASC
         `, [req.params.id]);
         res.json({ groups });
@@ -1349,8 +1375,8 @@ app.post('/api/customers/:id/groups', auth, async (req, res) => {
         if (!group_id) return res.status(400).json({ error: 'group_id is required' });
 
         await pool.execute(
-            'INSERT IGNORE INTO customer_groups (customer_id, group_id) VALUES (?, ?)',
-            [req.params.id, group_id]
+            'UPDATE customers SET group_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [group_id, req.params.id]
         );
 
         res.json({ message: 'Customer assigned to group' });
@@ -1403,25 +1429,19 @@ app.post('/api/customers/:id/notes', auth, async (req, res) => {
         if (!note || !note.trim()) return res.status(400).json({ error: 'note is required' });
         if (!due_date) return res.status(400).json({ error: 'due_date is required' });
 
+        const [customerRows] = await pool.execute(`
+            SELECT assigned_user_id, group_id
+            FROM customers
+            WHERE id = ?
+        `, [req.params.id]);
+        const customer = customerRows[0] || null;
         const managedProvided = managed_by !== undefined && managed_by !== null && managed_by !== '';
         const groupProvided = group_id !== undefined && group_id !== null && group_id !== '';
-
-        const [latestRows] = await pool.execute(`
-            SELECT managed_by, group_id
-            FROM customer_notes
-            WHERE customer_id = ?
-            ORDER BY created_at DESC, id DESC
-            LIMIT 1
-        `, [req.params.id]);
-
-        const latest = latestRows[0] || null;
-        const managerId = managedProvided
-            ? Number(managed_by)
-            : (latest?.managed_by || req.userId);
-        const groupId = groupProvided
-            ? Number(group_id)
-            : (latest?.group_id || null);
-        const actionType = (managerId !== req.userId || groupId) ? 'transfer' : 'note';
+        const currentManagerId = customer?.assigned_user_id || req.userId;
+        const currentGroupId = customer?.group_id || null;
+        const managerId = managedProvided ? Number(managed_by) : currentManagerId;
+        const groupId = groupProvided ? Number(group_id) : currentGroupId;
+        const actionType = (managerId !== currentManagerId || groupId !== currentGroupId) ? 'transfer' : 'note';
 
         const [result] = await pool.execute(
             `INSERT INTO customer_notes (customer_id, note, due_date, created_by, managed_by, group_id, action_type)
@@ -1429,12 +1449,10 @@ app.post('/api/customers/:id/notes', auth, async (req, res) => {
             [req.params.id, note.trim(), due_date, req.userId, managerId, groupId, actionType]
         );
 
-        if (groupId) {
-            await pool.execute(
-                'INSERT IGNORE INTO customer_groups (customer_id, group_id) VALUES (?, ?)',
-                [req.params.id, groupId]
-            );
-        }
+        await pool.execute(
+            'UPDATE customers SET assigned_user_id = ?, group_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [managerId, groupId, req.params.id]
+        );
 
         const [rows] = await pool.execute(`
             SELECT
@@ -1515,8 +1533,8 @@ app.post('/api/customers/:id/transfers', auth, async (req, res) => {
         );
 
         await pool.execute(
-            'INSERT IGNORE INTO customer_groups (customer_id, group_id) VALUES (?, ?)',
-            [req.params.id, group_id]
+            'UPDATE customers SET assigned_user_id = ?, group_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [managed_by, group_id, req.params.id]
         );
 
         const [rows] = await pool.execute(`
@@ -1548,12 +1566,26 @@ app.post('/api/customers/:id/transfers', auth, async (req, res) => {
 // Create customer
 app.post('/api/customers', auth, async (req, res) => {
     try {
-        const { name, email, phone, company, notes } = req.body;
+        const { name, email, phone, company, notes, assigned_user_id, group_id, status, priority } = req.body;
         if (!name) return res.status(400).json({ error: 'Name is required' });
 
         const [result] = await pool.execute(
-            'INSERT INTO customers (name, email, phone, company, notes, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-            [name, email || null, phone || null, company || null, notes || null, req.userId]
+            `INSERT INTO customers
+                (name, email, phone, company, notes, created_by, assigned_user_id, group_id, status, priority, internal_summary)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                name,
+                email || null,
+                phone || null,
+                company || null,
+                notes || null,
+                req.userId,
+                assigned_user_id || req.userId,
+                group_id || null,
+                status || null,
+                Number.isFinite(Number(priority)) ? Number(priority) : 0,
+                notes || null
+            ]
         );
 
         const [customer] = await pool.execute('SELECT * FROM customers WHERE id = ?', [result.insertId]);
@@ -1570,10 +1602,34 @@ app.put('/api/customers/:id', auth, async (req, res) => {
         const hasAccess = await canAccessCustomer(req.params.id, req.userId);
         if (!hasAccess) return res.status(404).json({ error: 'Customer not found' });
 
-        const { name, email, phone, company, notes } = req.body;
+        const { name, email, phone, company, notes, assigned_user_id, group_id, status, priority } = req.body;
         await pool.execute(
-            'UPDATE customers SET name = ?, email = ?, phone = ?, company = ?, notes = ? WHERE id = ?',
-            [name, email || null, phone || null, company || null, notes || null, req.params.id]
+            `UPDATE customers
+             SET name = ?,
+                 email = ?,
+                 phone = ?,
+                 company = ?,
+                 notes = ?,
+                 assigned_user_id = ?,
+                 group_id = ?,
+                 status = ?,
+                 priority = ?,
+                 internal_summary = ?,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [
+                name,
+                email || null,
+                phone || null,
+                company || null,
+                notes || null,
+                assigned_user_id || null,
+                group_id || null,
+                status || null,
+                Number.isFinite(Number(priority)) ? Number(priority) : 0,
+                notes || null,
+                req.params.id
+            ]
         );
         const [customer] = await pool.execute('SELECT * FROM customers WHERE id = ?', [req.params.id]);
         res.json({ message: 'Customer updated', customer: customer[0] });
@@ -1647,8 +1703,8 @@ app.post('/api/groups/:id/customers', auth, async (req, res) => {
 
         for (const cid of customer_ids) {
             await pool.execute(
-                'INSERT IGNORE INTO customer_groups (customer_id, group_id) VALUES (?, ?)',
-                [cid, req.params.id]
+                'UPDATE customers SET group_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+                [req.params.id, cid]
             );
         }
         res.json({ message: 'Customers added to group' });
@@ -1663,8 +1719,7 @@ app.get('/api/groups/:id/customers', auth, async (req, res) => {
     try {
         const [customers] = await pool.execute(`
             SELECT c.* FROM customers c
-            INNER JOIN customer_groups cg ON c.id = cg.customer_id
-            WHERE cg.group_id = ?
+            WHERE c.group_id = ?
               AND ${getCustomerAccessCondition()}
             ORDER BY c.name ASC
         `, [req.params.id, req.userId, req.userId]);

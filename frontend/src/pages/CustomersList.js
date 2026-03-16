@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -106,6 +106,9 @@ function CustomersList() {
     const [selectedCustomerId, setSelectedCustomerId] = useState(null);
     const [sortBy, setSortBy] = useState('account_key');
     const [sortDirection, setSortDirection] = useState('asc');
+    const [syncSuccessMessage, setSyncSuccessMessage] = useState('');
+    const previousReport175StatusRef = useRef(null);
+    const pendingSyncRequestRef = useRef(false);
 
     const { data, isLoading, isError, error } = useQuery({
         queryKey: ['customers', page, search, managedBy, groupId, balanceMode],
@@ -126,14 +129,26 @@ function CustomersList() {
 
     const { data: syncStatusData } = useQuery({
         queryKey: ['customers-sync-status'],
-        queryFn: () => customersAPI.getSyncStatus()
+        queryFn: () => customersAPI.getSyncStatus(),
+        refetchInterval: (query) => {
+            const sync = query.state.data?.sync;
+            const isRunning = sync?.report175?.status === 'running' || sync?.background?.status === 'running';
+            return isRunning ? 2000 : false;
+        }
     });
 
     const syncMutation = useMutation({
         mutationFn: customersAPI.sync,
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['customers'] });
+        onMutate: () => {
+            pendingSyncRequestRef.current = true;
+            setSyncSuccessMessage('');
+        },
+        onSuccess: (data) => {
             queryClient.invalidateQueries({ queryKey: ['customers-sync-status'] });
+            if (data?.message === 'Sync already in progress.') {
+                setSyncSuccessMessage('Sync already in progress.');
+                pendingSyncRequestRef.current = false;
+            }
         }
     });
 
@@ -162,7 +177,12 @@ function CustomersList() {
     const syncCaches = syncStatusData?.caches;
     const isFastSyncRunning = syncStatus?.report175?.status === 'running';
     const isBackgroundSyncRunning = syncStatus?.background?.status === 'running';
-    const isAnySyncRunning = isFastSyncRunning || isBackgroundSyncRunning || syncMutation.isPending;
+    const isSyncActionPending = isFastSyncRunning || syncMutation.isPending;
+    const syncErrorMessage =
+        syncMutation.error?.response?.data?.error ||
+        syncStatus?.report175?.error ||
+        syncStatus?.background?.error ||
+        '';
 
     const handleSearchSubmit = (event) => {
         event.preventDefault();
@@ -180,6 +200,37 @@ function CustomersList() {
         setManagedBy((currentValue) => (currentValue === '' && user?.id ? String(user.id) : currentValue));
         setIsManagerFilterReady(true);
     }, [authLoading, user?.id]);
+
+    useEffect(() => {
+        if (!syncSuccessMessage) return undefined;
+
+        const timeoutId = window.setTimeout(() => {
+            setSyncSuccessMessage('');
+        }, 3500);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [syncSuccessMessage]);
+
+    useEffect(() => {
+        const currentStatus = syncStatus?.report175?.status || null;
+        const previousStatus = previousReport175StatusRef.current;
+
+        if (
+            pendingSyncRequestRef.current &&
+            (currentStatus === 'completed' || (previousStatus === 'running' && currentStatus === 'completed'))
+        ) {
+            setSyncSuccessMessage('Fast sync completed. Supplemental reports are syncing in the background.');
+            queryClient.invalidateQueries({ queryKey: ['customers'] });
+            queryClient.invalidateQueries({ queryKey: ['customers-sync-status'] });
+            pendingSyncRequestRef.current = false;
+        }
+
+        if (pendingSyncRequestRef.current && currentStatus === 'failed') {
+            pendingSyncRequestRef.current = false;
+        }
+
+        previousReport175StatusRef.current = currentStatus;
+    }, [queryClient, syncStatus?.report175?.status]);
 
     const openCustomerInPlace = (customerId) => {
         if (!customerId) return;
@@ -289,7 +340,7 @@ function CustomersList() {
                             <Button
                                 onClick={() => syncMutation.mutate()}
                                 variant="contained"
-                                disabled={isAnySyncRunning}
+                                disabled={isSyncActionPending}
                                 sx={{
                                     borderRadius: 999,
                                     px: 2.5,
@@ -382,7 +433,7 @@ function CustomersList() {
                     </Paper>
                 )}
 
-                {syncMutation.isSuccess && (
+                {false && syncSuccessMessage && (
                     <Alert severity="success" sx={{ mb: 2 }}>
                         {syncMutation.data?.message || 'הסנכרון הושלם'}
                     </Alert>
@@ -394,7 +445,19 @@ function CustomersList() {
                     </Alert>
                 )}
 
-                {syncMutation.isError && (
+                {syncSuccessMessage && (
+                    <Alert severity="success" sx={{ mb: 2 }}>
+                        {syncSuccessMessage}
+                    </Alert>
+                )}
+
+                {syncErrorMessage && (
+                    <Alert severity="error" sx={{ mb: 2 }}>
+                        {syncErrorMessage}
+                    </Alert>
+                )}
+
+                {false && syncMutation.isError && (
                     <Alert severity="error" sx={{ mb: 2 }}>
                         {syncMutation.error?.response?.data?.error || 'הסנכרון נכשל'}
                     </Alert>
